@@ -13,6 +13,11 @@ use crate::{AppHandle, Manager, Position, Runtime, Window};
 use muda::{ContextMenu, MenuId};
 
 impl<R: Runtime> super::ContextMenu for Submenu<R> {
+  #[cfg(target_os = "windows")]
+  fn hpopupmenu(&self) -> crate::Result<isize> {
+    run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().hpopupmenu())
+  }
+
   fn popup<T: Runtime>(&self, window: Window<T>) -> crate::Result<()> {
     self.popup_inner(window, None::<Position>)
   }
@@ -36,9 +41,11 @@ impl<R: Runtime> ContextMenuBase for Submenu<R> {
     run_item_main_thread!(self, move |self_: Self| {
       #[cfg(target_os = "macos")]
       if let Ok(view) = window.ns_view() {
-        self_
-          .inner()
-          .show_context_menu_for_nsview(view as _, position);
+        unsafe {
+          self_
+            .inner()
+            .show_context_menu_for_nsview(view as _, position);
+        }
       }
 
       #[cfg(any(
@@ -56,9 +63,11 @@ impl<R: Runtime> ContextMenuBase for Submenu<R> {
 
       #[cfg(windows)]
       if let Ok(hwnd) = window.hwnd() {
-        self_
-          .inner()
-          .show_context_menu_for_hwnd(hwnd.0 as _, position)
+        unsafe {
+          self_
+            .inner()
+            .show_context_menu_for_hwnd(hwnd.0 as _, position)
+        }
       }
     })
   }
@@ -164,9 +173,9 @@ impl<R: Runtime> Submenu<R> {
   /// Add a menu item to the end of this submenu.
   pub fn append(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .append(kind.inner().inner_muda()))?
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().append(kind.inner().inner_muda())
+    })?
     .map_err(Into::into)
   }
 
@@ -216,18 +225,20 @@ impl<R: Runtime> Submenu<R> {
   /// Remove a menu item from this submenu.
   pub fn remove(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .remove(kind.inner().inner_muda()))?
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().remove(kind.inner().inner_muda())
+    })?
     .map_err(Into::into)
   }
 
   /// Remove the menu item at the specified position from this submenu and returns it.
   pub fn remove_at(&self, position: usize) -> crate::Result<Option<MenuItemKind<R>>> {
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .remove_at(position)
-      .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i)))
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0)
+        .as_ref()
+        .remove_at(position)
+        .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
+    })
   }
 
   /// Retrieves the menu item matching the given identifier.
@@ -284,9 +295,9 @@ impl<R: Runtime> Submenu<R> {
   /// certain other items to the menu.
   #[cfg(target_os = "macos")]
   pub fn set_as_windows_menu_for_nsapp(&self) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .set_as_windows_menu_for_nsapp())?;
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().set_as_windows_menu_for_nsapp()
+    })?;
     Ok(())
   }
 
@@ -298,9 +309,9 @@ impl<R: Runtime> Submenu<R> {
   /// which has a title matching the localized word "Help".
   #[cfg(target_os = "macos")]
   pub fn set_as_help_menu_for_nsapp(&self) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .set_as_help_menu_for_nsapp())?;
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().set_as_help_menu_for_nsapp()
+    })?;
     Ok(())
   }
 }

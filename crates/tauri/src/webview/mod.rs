@@ -22,26 +22,27 @@ use tauri_runtime::{
   webview::{DetachedWebview, PendingWebview, WebviewAttributes},
   WebviewDispatch,
 };
-use tauri_utils::config::{WebviewUrl, WindowConfig};
+pub use tauri_utils::config::Color;
+use tauri_utils::config::{BackgroundThrottlingPolicy, WebviewUrl, WindowConfig};
 pub use url::Url;
 
 use crate::{
   app::{UriSchemeResponder, WebviewEvent},
   event::{EmitArgs, EventTarget},
   ipc::{
-    CallbackFn, CommandArg, CommandItem, Invoke, InvokeBody, InvokeError, InvokeMessage,
-    InvokeResolver, Origin, OwnedInvokeResponder,
+    CallbackFn, CommandArg, CommandItem, CommandScope, GlobalScope, Invoke, InvokeBody,
+    InvokeError, InvokeMessage, InvokeResolver, Origin, OwnedInvokeResponder, ScopeObject,
   },
   manager::AppManager,
   sealed::{ManagerBase, RuntimeOrDispatch},
-  AppHandle, Emitter, Event, EventId, EventLoopMessage, Listener, Manager, ResourceTable, Runtime,
-  Window,
+  AppHandle, Emitter, Event, EventId, EventLoopMessage, EventName, Listener, Manager,
+  ResourceTable, Runtime, Window,
 };
 
 use std::{
   borrow::Cow,
   hash::{Hash, Hasher},
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -49,7 +50,7 @@ pub(crate) type WebResourceRequestHandler =
   dyn Fn(http::Request<Vec<u8>>, &mut http::Response<Cow<'static, [u8]>>) + Send + Sync;
 pub(crate) type NavigationHandler = dyn Fn(&Url) -> bool + Send;
 pub(crate) type UriSchemeProtocolHandler =
-  Box<dyn Fn(http::Request<Vec<u8>>, UriSchemeResponder) + Send + Sync>;
+  Box<dyn Fn(&str, http::Request<Vec<u8>>, UriSchemeResponder) + Send + Sync>;
 pub(crate) type OnPageLoad<R> = dyn Fn(Webview<R>, PageLoadPayload<'_>) + Send + Sync + 'static;
 
 pub(crate) type DownloadHandler<R> = dyn Fn(Webview<R>, DownloadEvent<'_>) -> bool + Send + Sync;
@@ -115,10 +116,8 @@ impl<'a> PageLoadPayload<'a> {
 /// # Stability
 ///
 /// This struct is **NOT** part of the public stable API and is only meant to be used
-/// by internal code and external testing/fuzzing tools. If not used with feature `unstable`, this
-/// struct is marked `#[non_exhaustive]` and is non-constructable externally.
+/// by internal code and external testing/fuzzing tools or custom invoke systems.
 #[derive(Debug)]
-#[cfg_attr(not(feature = "test"), non_exhaustive)]
 pub struct InvokeRequest {
   /// The invoke command.
   pub cmd: String,
@@ -179,7 +178,7 @@ impl PlatformWebview {
   /// [WKWebView]: https://developer.apple.com/documentation/webkit/wkwebview
   #[cfg(any(target_os = "macos", target_os = "ios"))]
   #[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
-  pub fn inner(&self) -> cocoa::base::id {
+  pub fn inner(&self) -> *mut std::ffi::c_void {
     self.0.webview
   }
 
@@ -188,7 +187,7 @@ impl PlatformWebview {
   /// [controller]: https://developer.apple.com/documentation/webkit/wkusercontentcontroller
   #[cfg(any(target_os = "macos", target_os = "ios"))]
   #[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
-  pub fn controller(&self) -> cocoa::base::id {
+  pub fn controller(&self) -> *mut std::ffi::c_void {
     self.0.manager
   }
 
@@ -197,7 +196,7 @@ impl PlatformWebview {
   /// [NSWindow]: https://developer.apple.com/documentation/appkit/nswindow
   #[cfg(target_os = "macos")]
   #[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
-  pub fn ns_window(&self) -> cocoa::base::id {
+  pub fn ns_window(&self) -> *mut std::ffi::c_void {
     self.0.ns_window
   }
 
@@ -206,7 +205,7 @@ impl PlatformWebview {
   /// [UIViewController]: https://developer.apple.com/documentation/uikit/uiviewcontroller
   #[cfg(target_os = "ios")]
   #[cfg_attr(docsrs, doc(cfg(target_os = "ios")))]
-  pub fn view_controller(&self) -> cocoa::base::id {
+  pub fn view_controller(&self) -> *mut std::ffi::c_void {
     self.0.view_controller
   }
 
@@ -335,11 +334,10 @@ async fn create_window(app: tauri::AppHandle) {
     doc = r####"
 ```
 #[tauri::command]
-async fn reopen_window(app: tauri::AppHandle) {
-  let window = tauri::window::WindowBuilder::from_config(&app, &app.config().app.windows.get(0).unwrap().clone())
-    .unwrap()
-    .build()
-    .unwrap();
+async fn create_window(app: tauri::AppHandle) {
+  let window = tauri::window::WindowBuilder::new(&app, "label").build().unwrap();
+  let webview_builder = tauri::webview::WebviewBuilder::from_config(&app.config().app.windows.get(0).unwrap().clone());
+  window.add_child(webview_builder, tauri::LogicalPosition::new(0, 0), window.inner_size().unwrap());
 }
 ```
   "####
@@ -607,11 +605,17 @@ tauri::Builder::default()
 
     pending.webview_attributes.bounds = Some(tauri_runtime::Rect { size, position });
 
+    let use_https_scheme = pending.webview_attributes.use_https_scheme;
+
     let webview = match &mut window.runtime() {
       RuntimeOrDispatch::Dispatch(dispatcher) => dispatcher.create_webview(pending),
       _ => unimplemented!(),
     }
-    .map(|webview| app_manager.webview.attach_webview(window.clone(), webview))?;
+    .map(|webview| {
+      app_manager
+        .webview
+        .attach_webview(window.clone(), webview, use_https_scheme)
+    })?;
 
     Ok(webview)
   }
@@ -756,6 +760,13 @@ fn main() {
     self
   }
 
+  /// Whether the webview should be focused or not.
+  #[must_use]
+  pub fn focused(mut self, focus: bool) -> Self {
+    self.webview_attributes.focus = focus;
+    self
+  }
+
   /// Sets the webview to automatically grow and shrink its size and position when the parent window resizes.
   #[must_use]
   pub fn auto_resize(mut self) -> Self {
@@ -777,25 +788,125 @@ fn main() {
     self.webview_attributes.zoom_hotkeys_enabled = enabled;
     self
   }
+
+  /// Whether browser extensions can be installed for the webview process
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Windows**: Enables the WebView2 environment's [`AreBrowserExtensionsEnabled`](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2environmentoptions?view=webview2-winrt-1.0.2739.15#arebrowserextensionsenabled)
+  /// - **MacOS / Linux / iOS / Android** - Unsupported.
+  #[must_use]
+  pub fn browser_extensions_enabled(mut self, enabled: bool) -> Self {
+    self.webview_attributes.browser_extensions_enabled = enabled;
+    self
+  }
+
+  /// Set the path from which to load extensions from. Extensions stored in this path should be unpacked Chrome extensions on Windows, and compiled `.so` extensions on Linux.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Windows**: Browser extensions must first be enabled. See [`browser_extensions_enabled`](Self::browser_extensions_enabled)
+  /// - **MacOS / iOS / Android** - Unsupported.
+  #[must_use]
+  pub fn extensions_path(mut self, path: impl AsRef<Path>) -> Self {
+    self.webview_attributes.extensions_path = Some(path.as_ref().to_path_buf());
+    self
+  }
+
+  /// Initialize the WebView with a custom data store identifier.
+  /// Can be used as a replacement for data_directory not being available in WKWebView.
+  ///
+  /// - **macOS / iOS**: Available on macOS >= 14 and iOS >= 17
+  /// - **Windows / Linux / Android**: Unsupported.
+  #[must_use]
+  pub fn data_store_identifier(mut self, data_store_identifier: [u8; 16]) -> Self {
+    self.webview_attributes.data_store_identifier = Some(data_store_identifier);
+    self
+  }
+
+  /// Sets whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android. Defaults to `false`.
+  ///
+  /// ## Note
+  ///
+  /// Using a `https` scheme will NOT allow mixed content when trying to fetch `http` endpoints and therefore will not match the behavior of the `<scheme>://localhost` protocols used on macOS and Linux.
+  ///
+  /// ## Warning
+  ///
+  /// Changing this value between releases will change the IndexedDB, cookies and localstorage location and your app will not be able to access the old data.
+  #[must_use]
+  pub fn use_https_scheme(mut self, enabled: bool) -> Self {
+    self.webview_attributes.use_https_scheme = enabled;
+    self
+  }
+
+  /// Whether web inspector, which is usually called browser devtools, is enabled or not. Enabled by default.
+  ///
+  /// This API works in **debug** builds, but requires `devtools` feature flag to enable it in **release** builds.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - macOS: This will call private functions on **macOS**
+  /// - Android: Open `chrome://inspect/#devices` in Chrome to get the devtools window. Wry's `WebView` devtools API isn't supported on Android.
+  /// - iOS: Open Safari > Develop > [Your Device Name] > [Your WebView] to get the devtools window.
+  #[must_use]
+  pub fn devtools(mut self, enabled: bool) -> Self {
+    self.webview_attributes.devtools.replace(enabled);
+    self
+  }
+
+  /// Set the webview background color.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **macOS / iOS**: Not implemented.
+  /// - **Windows**: On Windows 7, alpha channel is ignored.
+  /// - **Windows**: On Windows 8 and newer, if alpha channel is not `0`, it will be ignored.
+  #[must_use]
+  pub fn background_color(mut self, color: Color) -> Self {
+    self.webview_attributes.background_color = Some(color);
+    self
+  }
+
+  /// Change the default background throttling behaviour.
+  ///
+  /// By default, browsers use a suspend policy that will throttle timers and even unload
+  /// the whole tab (view) to free resources after roughly 5 minutes when a view became
+  /// minimized or hidden. This will pause all tasks until the documents visibility state
+  /// changes back from hidden to visible by bringing the view back to the foreground.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **Linux / Windows / Android**: Unsupported. Workarounds like a pending WebLock transaction might suffice.
+  /// - **iOS**: Supported since version 17.0+.
+  /// - **macOS**: Supported since version 14.0+.
+  ///
+  /// see https://github.com/tauri-apps/tauri/issues/5250#issuecomment-2569380578
+  #[must_use]
+  pub fn background_throttling(mut self, policy: BackgroundThrottlingPolicy) -> Self {
+    self.webview_attributes.background_throttling = Some(policy);
+    self
+  }
 }
 
 /// Webview.
 #[default_runtime(crate::Wry, wry)]
 pub struct Webview<R: Runtime> {
-  window_label: Arc<Mutex<String>>,
+  pub(crate) window: Arc<Mutex<Window<R>>>,
+  /// The webview created by the runtime.
+  pub(crate) webview: DetachedWebview<EventLoopMessage, R>,
   /// The manager to associate this webview with.
   pub(crate) manager: Arc<AppManager<R>>,
   pub(crate) app_handle: AppHandle<R>,
-  /// The webview created by the runtime.
-  pub(crate) webview: DetachedWebview<EventLoopMessage, R>,
   pub(crate) resources_table: Arc<Mutex<ResourceTable>>,
+  use_https_scheme: bool,
 }
 
 impl<R: Runtime> std::fmt::Debug for Webview<R> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Window")
-      .field("window_label", &self.window_label)
+      .field("window", &self.window.lock().unwrap())
       .field("webview", &self.webview)
+      .field("use_https_scheme", &self.use_https_scheme)
       .finish()
   }
 }
@@ -803,11 +914,12 @@ impl<R: Runtime> std::fmt::Debug for Webview<R> {
 impl<R: Runtime> Clone for Webview<R> {
   fn clone(&self) -> Self {
     Self {
-      window_label: self.window_label.clone(),
+      window: self.window.clone(),
+      webview: self.webview.clone(),
       manager: self.manager.clone(),
       app_handle: self.app_handle.clone(),
-      webview: self.webview.clone(),
       resources_table: self.resources_table.clone(),
+      use_https_scheme: self.use_https_scheme,
     }
   }
 }
@@ -830,13 +942,18 @@ impl<R: Runtime> PartialEq for Webview<R> {
 /// Base webview functions.
 impl<R: Runtime> Webview<R> {
   /// Create a new webview that is attached to the window.
-  pub(crate) fn new(window: Window<R>, webview: DetachedWebview<EventLoopMessage, R>) -> Self {
+  pub(crate) fn new(
+    window: Window<R>,
+    webview: DetachedWebview<EventLoopMessage, R>,
+    use_https_scheme: bool,
+  ) -> Self {
     Self {
-      window_label: Arc::new(Mutex::new(window.label().into())),
       manager: window.manager.clone(),
       app_handle: window.app_handle.clone(),
+      window: Arc::new(Mutex::new(window)),
       webview,
       resources_table: Default::default(),
+      use_https_scheme,
     }
   }
 
@@ -863,12 +980,94 @@ impl<R: Runtime> Webview<R> {
     &self.webview.label
   }
 
+  /// Whether the webview was configured to use the HTTPS scheme or not.
+  pub(crate) fn use_https_scheme(&self) -> bool {
+    self.use_https_scheme
+  }
+
   /// Registers a window event listener.
   pub fn on_webview_event<F: Fn(&WebviewEvent) + Send + 'static>(&self, f: F) {
     self
       .webview
       .dispatcher
       .on_webview_event(move |event| f(&event.clone().into()));
+  }
+
+  /// Resolves the given command scope for this webview on the currently loaded URL.
+  ///
+  /// If the command is not allowed, returns None.
+  ///
+  /// If the scope cannot be deserialized to the given type, an error is returned.
+  ///
+  /// In a command context this can be directly resolved from the command arguments via [CommandScope]:
+  ///
+  /// ```
+  /// use tauri::ipc::CommandScope;
+  ///
+  /// #[derive(Debug, serde::Deserialize)]
+  /// struct ScopeType {
+  ///   some_value: String,
+  /// }
+  /// #[tauri::command]
+  /// fn my_command(scope: CommandScope<ScopeType>) {
+  ///   // check scope
+  /// }
+  /// ```
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use tauri::Manager;
+  ///
+  /// #[derive(Debug, serde::Deserialize)]
+  /// struct ScopeType {
+  ///   some_value: String,
+  /// }
+  ///
+  /// tauri::Builder::default()
+  ///   .setup(|app| {
+  ///     let webview = app.get_webview_window("main").unwrap();
+  ///     let scope = webview.resolve_command_scope::<ScopeType>("my-plugin", "read");
+  ///     Ok(())
+  ///   });
+  /// ```
+  pub fn resolve_command_scope<T: ScopeObject>(
+    &self,
+    plugin: &str,
+    command: &str,
+  ) -> crate::Result<Option<ResolvedScope<T>>> {
+    let current_url = self.url()?;
+    let is_local = self.is_local_url(&current_url);
+    let origin = if is_local {
+      Origin::Local
+    } else {
+      Origin::Remote { url: current_url }
+    };
+
+    let cmd_name = format!("plugin:{plugin}|{command}");
+    let resolved_access = self
+      .manager()
+      .runtime_authority
+      .lock()
+      .unwrap()
+      .resolve_access(&cmd_name, self.window().label(), self.label(), &origin);
+
+    if let Some(access) = resolved_access {
+      let scope_ids = access
+        .iter()
+        .filter_map(|cmd| cmd.scope_id)
+        .collect::<Vec<_>>();
+
+      let command_scope = CommandScope::resolve(self, scope_ids)?;
+      let global_scope = GlobalScope::resolve(self, plugin)?;
+
+      Ok(Some(ResolvedScope {
+        global_scope,
+        command_scope,
+      }))
+    } else {
+      Ok(None)
+    }
   }
 }
 
@@ -933,18 +1132,27 @@ impl<R: Runtime> Webview<R> {
     self.webview.dispatcher.set_focus().map_err(Into::into)
   }
 
+  /// Hide the webview.
+  pub fn hide(&self) -> crate::Result<()> {
+    self.webview.dispatcher.hide().map_err(Into::into)
+  }
+
+  /// Show the webview.
+  pub fn show(&self) -> crate::Result<()> {
+    self.webview.dispatcher.show().map_err(Into::into)
+  }
+
   /// Move the webview to the given window.
   pub fn reparent(&self, window: &Window<R>) -> crate::Result<()> {
     #[cfg(not(feature = "unstable"))]
     {
-      let current_window = self.window();
-      if current_window.is_webview_window() || window.is_webview_window() {
+      if self.window_ref().is_webview_window() || window.is_webview_window() {
         return Err(crate::Error::CannotReparentWebviewWindow);
       }
     }
 
+    *self.window.lock().unwrap() = window.clone();
     self.webview.dispatcher.reparent(window.window.id)?;
-    *self.window_label.lock().unwrap() = window.label().to_string();
     Ok(())
   }
 
@@ -980,19 +1188,24 @@ impl<R: Runtime> Webview<R> {
 impl<R: Runtime> Webview<R> {
   /// The window that is hosting this webview.
   pub fn window(&self) -> Window<R> {
-    self
-      .manager
-      .get_window(&self.window_label.lock().unwrap())
-      .expect("could not locate webview parent window")
+    self.window.lock().unwrap().clone()
+  }
+
+  /// A reference to the window that is hosting this webview.
+  pub fn window_ref(&self) -> MutexGuard<'_, Window<R>> {
+    self.window.lock().unwrap()
   }
 
   pub(crate) fn window_label(&self) -> String {
-    self.window_label.lock().unwrap().clone()
+    self.window_ref().label().to_string()
   }
 
   /// Executes a closure, providing it with the webview handle that is specific to the current platform.
   ///
   /// The closure is executed on the main thread.
+  ///
+  /// Note that `webview2-com`, `webkit2gtk`, `objc2_web_kit` and similar crates may be updated in minor releases of Tauri.
+  /// Therefore it's recommended to pin Tauri to at least a minor version when you're using `with_webview`.
   ///
   /// # Examples
   ///
@@ -1000,9 +1213,6 @@ impl<R: Runtime> Webview<R> {
     feature = "unstable",
     doc = r####"
 ```rust,no_run
-#[cfg(target_os = "macos")]
-#[macro_use]
-extern crate objc;
 use tauri::Manager;
 
 fn main() {
@@ -1026,10 +1236,14 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         unsafe {
-          let () = msg_send![webview.inner(), setPageZoom: 4.];
-          let () = msg_send![webview.controller(), removeAllUserScripts];
-          let bg_color: cocoa::base::id = msg_send![class!(NSColor), colorWithDeviceRed:0.5 green:0.2 blue:0.4 alpha:1.];
-          let () = msg_send![webview.ns_window(), setBackgroundColor: bg_color];
+          let view: &objc2_web_kit::WKWebView = &*webview.inner().cast();
+          let controller: &objc2_web_kit::WKUserContentController = &*webview.controller().cast();
+          let window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+
+          view.setPageZoom(4.);
+          controller.removeAllUserScripts();
+          let bg_color = objc2_app_kit::NSColor::colorWithDeviceRed_green_blue_alpha(0.5, 0.2, 0.4, 1.);
+          window.setBackgroundColor(Some(&bg_color));
         }
 
         #[cfg(target_os = "android")]
@@ -1069,14 +1283,16 @@ fn main() {
   }
 
   /// Navigates the webview to the defined url.
-  pub fn navigate(&mut self, url: Url) -> crate::Result<()> {
+  pub fn navigate(&self, url: Url) -> crate::Result<()> {
     self.webview.dispatcher.navigate(url).map_err(Into::into)
   }
 
   fn is_local_url(&self, current_url: &Url) -> bool {
+    let uses_https = current_url.scheme() == "https";
+
     // if from `tauri://` custom protocol
     ({
-      let protocol_url = self.manager().protocol_url();
+      let protocol_url = self.manager().protocol_url(uses_https);
       current_url.scheme() == protocol_url.scheme()
       && current_url.domain() == protocol_url.domain()
     }) ||
@@ -1084,7 +1300,7 @@ fn main() {
     // or if relative to `devUrl` or `frontendDist`
       self
           .manager()
-          .get_url()
+          .get_url(uses_https)
           .make_relative(current_url)
           .is_some()
 
@@ -1100,7 +1316,7 @@ fn main() {
         // so we check using the first part of the domain
         #[cfg(any(windows, target_os = "android"))]
         let local = {
-          let protocol_url = self.manager().protocol_url();
+          let protocol_url = self.manager().protocol_url(uses_https);
           let maybe_protocol = current_url
             .domain()
             .and_then(|d| d .split_once('.'))
@@ -1137,17 +1353,11 @@ fn main() {
       return;
     }
 
-    let custom_responder = self.manager().webview.invoke_responder.clone();
-
     let resolver = InvokeResolver::new(
       self.clone(),
       Arc::new(Mutex::new(Some(Box::new(
         #[allow(unused_variables)]
         move |webview: Webview<R>, cmd, response, callback, error| {
-          if let Some(responder) = &custom_responder {
-            (responder)(&webview, &cmd, &response, callback, error);
-          }
-
           responder(webview, cmd, response, callback, error);
         },
       )))),
@@ -1178,7 +1388,7 @@ fn main() {
       let runtime_authority = manager.runtime_authority.lock().unwrap();
       let acl = runtime_authority.resolve_access(
         &request.cmd,
-        message.webview.window().label(),
+        message.webview.window_ref().label(),
         message.webview.label(),
         &acl_origin,
       );
@@ -1300,7 +1510,7 @@ fn main() {
   /// Register a JS event listener and return its identifier.
   pub(crate) fn listen_js(
     &self,
-    event: &str,
+    event: EventName<&str>,
     target: EventTarget,
     handler: CallbackFn,
   ) -> crate::Result<EventId> {
@@ -1322,7 +1532,7 @@ fn main() {
   }
 
   /// Unregister a JS event listener.
-  pub(crate) fn unlisten_js(&self, event: &str, id: EventId) -> crate::Result<()> {
+  pub(crate) fn unlisten_js(&self, event: EventName<&str>, id: EventId) -> crate::Result<()> {
     let listeners = self.manager().listeners();
 
     self.eval(&crate::event::unlisten_js_script(
@@ -1467,6 +1677,31 @@ tauri::Builder::default()
       .set_zoom(scale_factor)
       .map_err(Into::into)
   }
+
+  /// Specify the webview background color.
+  ///
+  /// ## Platfrom-specific:
+  ///
+  /// - **macOS / iOS**: Not implemented.
+  /// - **Windows**:
+  ///   - On Windows 7, transparency is not supported and the alpha value will be ignored.
+  ///   - On Windows higher than 7: translucent colors are not supported so any alpha value other than `0` will be replaced by `255`
+  pub fn set_background_color(&self, color: Option<Color>) -> crate::Result<()> {
+    self
+      .webview
+      .dispatcher
+      .set_background_color(color)
+      .map_err(Into::into)
+  }
+
+  /// Clear all browsing data for this webview.
+  pub fn clear_all_browsing_data(&self) -> crate::Result<()> {
+    self
+      .webview
+      .dispatcher
+      .clear_all_browsing_data()
+      .map_err(Into::into)
+  }
 }
 
 impl<R: Runtime> Listener<R> for Webview<R> {
@@ -1495,8 +1730,9 @@ tauri::Builder::default()
   where
     F: Fn(Event) + Send + 'static,
   {
+    let event = EventName::new(event.into()).unwrap();
     self.manager.listen(
-      event.into(),
+      event,
       EventTarget::Webview {
         label: self.label().to_string(),
       },
@@ -1511,8 +1747,9 @@ tauri::Builder::default()
   where
     F: FnOnce(Event) + Send + 'static,
   {
+    let event = EventName::new(event.into()).unwrap();
     self.manager.once(
-      event.into(),
+      event,
       EventTarget::Webview {
         label: self.label().to_string(),
       },
@@ -1554,94 +1791,7 @@ tauri::Builder::default()
   }
 }
 
-impl<R: Runtime> Emitter<R> for Webview<R> {
-  /// Emits an event to all [targets](EventTarget).
-  ///
-  /// # Examples
-  #[cfg_attr(
-    feature = "unstable",
-    doc = r####"
-```
-use tauri::Emitter;
-
-#[tauri::command]
-fn synchronize(webview: tauri::Webview) {
-  // emits the synchronized event to all webviews
-  webview.emit("synchronized", ());
-}
-  ```
-  "####
-  )]
-  fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) -> crate::Result<()> {
-    self.manager.emit(event, payload)
-  }
-
-  /// Emits an event to all [targets](EventTarget) matching the given target.
-  ///
-  /// # Examples
-  #[cfg_attr(
-    feature = "unstable",
-    doc = r####"
-```
-use tauri::{Emitter, EventTarget};
-
-#[tauri::command]
-fn download(webview: tauri::Webview) {
-  for i in 1..100 {
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    // emit a download progress event to all listeners
-    webview.emit_to(EventTarget::any(), "download-progress", i);
-    // emit an event to listeners that used App::listen or AppHandle::listen
-    webview.emit_to(EventTarget::app(), "download-progress", i);
-    // emit an event to any webview/window/webviewWindow matching the given label
-    webview.emit_to("updater", "download-progress", i); // similar to using EventTarget::labeled
-    webview.emit_to(EventTarget::labeled("updater"), "download-progress", i);
-    // emit an event to listeners that used WebviewWindow::listen
-    webview.emit_to(EventTarget::webview_window("updater"), "download-progress", i);
-  }
-}
-```
-"####
-  )]
-  fn emit_to<I, S>(&self, target: I, event: &str, payload: S) -> crate::Result<()>
-  where
-    I: Into<EventTarget>,
-    S: Serialize + Clone,
-  {
-    self.manager.emit_to(target, event, payload)
-  }
-
-  /// Emits an event to all [targets](EventTarget) based on the given filter.
-  ///
-  /// # Examples
-  #[cfg_attr(
-    feature = "unstable",
-    doc = r####"
-```
-use tauri::{Emitter, EventTarget};
-
-#[tauri::command]
-fn download(webview: tauri::Webview) {
-  for i in 1..100 {
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    // emit a download progress event to the updater window
-    webview.emit_filter("download-progress", i, |t| match t {
-      EventTarget::WebviewWindow { label } => label == "main",
-      _ => false,
-    });
-  }
-}
-  ```
-  "####
-  )]
-  fn emit_filter<S, F>(&self, event: &str, payload: S, filter: F) -> crate::Result<()>
-  where
-    S: Serialize + Clone,
-    F: Fn(&EventTarget) -> bool,
-  {
-    self.manager.emit_filter(event, payload, filter)
-  }
-}
+impl<R: Runtime> Emitter<R> for Webview<R> {}
 
 impl<R: Runtime> Manager<R> for Webview<R> {
   fn resources_table(&self) -> MutexGuard<'_, ResourceTable> {
@@ -1674,6 +1824,24 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Webview<R> {
   /// Grabs the [`Webview`] from the [`CommandItem`]. This will never fail.
   fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
     Ok(command.message.webview())
+  }
+}
+
+/// Resolved scope that can be obtained via [`Webview::resolve_command_scope`].
+pub struct ResolvedScope<T: ScopeObject> {
+  command_scope: CommandScope<T>,
+  global_scope: GlobalScope<T>,
+}
+
+impl<T: ScopeObject> ResolvedScope<T> {
+  /// The global plugin scope.
+  pub fn global_scope(&self) -> &GlobalScope<T> {
+    &self.global_scope
+  }
+
+  /// The command-specific scope.
+  pub fn command_scope(&self) -> &CommandScope<T> {
+    &self.command_scope
   }
 }
 

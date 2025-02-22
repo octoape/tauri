@@ -9,8 +9,10 @@ use tauri_runtime::{
   dpi::{PhysicalPosition, PhysicalSize, Position, Size},
   monitor::Monitor,
   webview::{DetachedWebview, PendingWebview},
-  window::{CursorIcon, DetachedWindow, PendingWindow, RawWindow, WindowEvent, WindowId},
-  window::{WindowBuilder, WindowBuilderBase},
+  window::{
+    CursorIcon, DetachedWindow, DetachedWindowWebview, PendingWindow, RawWindow, WindowBuilder,
+    WindowBuilderBase, WindowEvent, WindowId,
+  },
   DeviceEventFilter, Error, EventLoopProxy, ExitRequestedEventAction, Icon, ProgressBarState,
   Result, RunEvent, Runtime, RuntimeHandle, RuntimeInitArgs, UserAttentionType, UserEvent,
   WebviewDispatch, WindowDispatch, WindowEventId,
@@ -158,14 +160,17 @@ impl<T: UserEvent> RuntimeHandle<T> for MockRuntimeHandle {
       },
     );
 
-    let webview = webview_id.map(|id| DetachedWebview {
-      label: pending.label.clone(),
-      dispatcher: MockWebviewDispatcher {
-        id,
-        context: self.context.clone(),
-        url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
-        last_evaluated_script: Default::default(),
+    let webview = webview_id.map(|id| DetachedWindowWebview {
+      webview: DetachedWebview {
+        label: pending.label.clone(),
+        dispatcher: MockWebviewDispatcher {
+          id,
+          context: self.context.clone(),
+          url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
+          last_evaluated_script: Default::default(),
+        },
       },
+      use_https_scheme: false,
     });
 
     Ok(DetachedWindow {
@@ -240,6 +245,10 @@ impl<T: UserEvent> RuntimeHandle<T> for MockRuntimeHandle {
   }
 
   fn available_monitors(&self) -> Vec<Monitor> {
+    unimplemented!()
+  }
+
+  fn set_theme(&self, theme: Option<Theme>) {
     unimplemented!()
   }
 
@@ -412,6 +421,10 @@ impl WindowBuilder for MockWindowBuilder {
     self
   }
 
+  fn window_classname<S: Into<String>>(self, classname: S) -> Self {
+    self
+  }
+
   fn shadow(self, enable: bool) -> Self {
     self
   }
@@ -472,6 +485,10 @@ impl WindowBuilder for MockWindowBuilder {
 
   fn get_theme(&self) -> Option<Theme> {
     None
+  }
+
+  fn background_color(self, _color: tauri_utils::config::Color) -> Self {
+    self
   }
 }
 
@@ -570,6 +587,22 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
   }
 
   fn set_auto_resize(&self, auto_resize: bool) -> Result<()> {
+    Ok(())
+  }
+
+  fn clear_all_browsing_data(&self) -> Result<()> {
+    Ok(())
+  }
+
+  fn hide(&self) -> Result<()> {
+    Ok(())
+  }
+
+  fn show(&self) -> Result<()> {
+    Ok(())
+  }
+
+  fn set_background_color(&self, color: Option<tauri_utils::config::Color>) -> Result<()> {
     Ok(())
   }
 }
@@ -757,14 +790,17 @@ impl<T: UserEvent> WindowDispatch<T> for MockWindowDispatcher {
       },
     );
 
-    let webview = webview_id.map(|id| DetachedWebview {
-      label: pending.label.clone(),
-      dispatcher: MockWebviewDispatcher {
-        id,
-        context: self.context.clone(),
-        url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
-        last_evaluated_script: Default::default(),
+    let webview = webview_id.map(|id| DetachedWindowWebview {
+      webview: DetachedWebview {
+        label: pending.label.clone(),
+        dispatcher: MockWebviewDispatcher {
+          id,
+          context: self.context.clone(),
+          url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
+          last_evaluated_script: Default::default(),
+        },
       },
+      use_https_scheme: false,
     });
 
     Ok(DetachedWindow {
@@ -941,6 +977,18 @@ impl<T: UserEvent> WindowDispatch<T> for MockWindowDispatcher {
     Ok(())
   }
 
+  fn set_badge_count(&self, count: Option<i64>, desktop_filename: Option<String>) -> Result<()> {
+    Ok(())
+  }
+
+  fn set_badge_label(&self, label: Option<String>) -> Result<()> {
+    Ok(())
+  }
+
+  fn set_overlay_icon(&self, icon: Option<Icon<'_>>) -> Result<()> {
+    Ok(())
+  }
+
   fn set_title_bar_style(&self, style: tauri_utils::TitleBarStyle) -> Result<()> {
     Ok(())
   }
@@ -949,6 +997,22 @@ impl<T: UserEvent> WindowDispatch<T> for MockWindowDispatcher {
     &self,
     constraints: tauri_runtime::window::WindowSizeConstraints,
   ) -> Result<()> {
+    Ok(())
+  }
+
+  fn set_theme(&self, theme: Option<Theme>) -> Result<()> {
+    Ok(())
+  }
+
+  fn set_enabled(&self, enabled: bool) -> Result<()> {
+    Ok(())
+  }
+
+  fn is_enabled(&self) -> Result<bool> {
+    Ok(true)
+  }
+
+  fn set_background_color(&self, color: Option<tauri_utils::config::Color>) -> Result<()> {
     Ok(())
   }
 }
@@ -1037,14 +1101,17 @@ impl<T: UserEvent> Runtime<T> for MockRuntime {
       },
     );
 
-    let webview = webview_id.map(|id| DetachedWebview {
-      label: pending.label.clone(),
-      dispatcher: MockWebviewDispatcher {
-        id,
-        context: self.context.clone(),
-        url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
-        last_evaluated_script: Default::default(),
+    let webview = webview_id.map(|id| DetachedWindowWebview {
+      webview: DetachedWebview {
+        label: pending.label.clone(),
+        dispatcher: MockWebviewDispatcher {
+          id,
+          context: self.context.clone(),
+          url: Arc::new(Mutex::new(pending.webview.unwrap().url)),
+          last_evaluated_script: Default::default(),
+        },
       },
+      use_https_scheme: false,
     });
 
     Ok(DetachedWindow {
@@ -1089,6 +1156,10 @@ impl<T: UserEvent> Runtime<T> for MockRuntime {
   }
 
   fn available_monitors(&self) -> Vec<Monitor> {
+    unimplemented!()
+  }
+
+  fn set_theme(&self, theme: Option<Theme>) {
     unimplemented!()
   }
 

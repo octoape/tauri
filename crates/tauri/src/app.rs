@@ -6,7 +6,7 @@ use crate::{
   image::Image,
   ipc::{
     channel::ChannelDataIpcQueue, CallbackFn, CommandArg, CommandItem, Invoke, InvokeError,
-    InvokeHandler, InvokeResponder, InvokeResponse,
+    InvokeHandler, InvokeResponseBody,
   },
   manager::{webview::UriSchemeProtocol, AppManager, Asset},
   plugin::{Plugin, PluginStore},
@@ -16,10 +16,9 @@ use crate::{
     ExitRequestedEventAction, RunEvent as RuntimeRunEvent,
   },
   sealed::{ManagerBase, RuntimeOrDispatch},
-  utils::config::Config,
-  utils::Env,
+  utils::{config::Config, Env},
   webview::PageLoadPayload,
-  Context, DeviceEventFilter, Emitter, EventLoopMessage, Listener, Manager, Monitor, Result,
+  Context, DeviceEventFilter, Emitter, EventLoopMessage, EventName, Listener, Manager, Monitor,
   Runtime, Scopes, StateManager, Theme, Webview, WebviewWindowBuilder, Window,
 };
 
@@ -37,9 +36,8 @@ use tauri_runtime::{
   window::DragDropEvent,
   RuntimeInitArgs,
 };
-use tauri_utils::PackageInfo;
+use tauri_utils::{assets::AssetsIter, PackageInfo};
 
-use serde::Serialize;
 use std::{
   borrow::Cow,
   collections::HashMap,
@@ -67,6 +65,8 @@ pub type SetupHook<R> =
   Box<dyn FnOnce(&mut App<R>) -> std::result::Result<(), Box<dyn std::error::Error>> + Send>;
 /// A closure that is run every time a page starts or finishes loading.
 pub type OnPageLoad<R> = dyn Fn(&Webview<R>, &PageLoadPayload<'_>) + Send + Sync + 'static;
+pub type ChannelInterceptor<R> =
+  Box<dyn Fn(&Webview<R>, CallbackFn, usize, &InvokeResponseBody) -> bool + Send + Sync + 'static>;
 
 /// The exit code on [`RunEvent::ExitRequested`] when [`AppHandle#method.restart`] is called.
 pub const RESTART_EXIT_CODE: i32 = i32::MAX;
@@ -267,14 +267,31 @@ pub struct AssetResolver<R: Runtime> {
 impl<R: Runtime> AssetResolver<R> {
   /// Gets the app asset associated with the given path.
   ///
+  /// By default it tries to infer your application's URL scheme in production by checking if all webviews
+  /// were configured with [`crate::webview::WebviewBuilder::use_https_scheme`] or `tauri.conf.json > app > windows > useHttpsScheme`.
+  /// If you are resolving an asset for a webview with a more dynamic configuration, see [`AssetResolver::get_for_scheme`].
+  ///
   /// Resolves to the embedded asset that is part of the app
-  /// in dev when [`devPath`](https://tauri.app/v1/api/config/#buildconfig.devpath) points to a folder in your filesystem
-  /// or in production when [`distDir`](https://tauri.app/v1/api/config/#buildconfig.distdir)
+  /// in dev when [`devUrl`](https://v2.tauri.app/reference/config/#devurl) points to a folder in your filesystem
+  /// or in production when [`frontendDist`](https://v2.tauri.app/reference/config/#frontenddist)
   /// points to your frontend assets.
   ///
   /// Fallbacks to reading the asset from the [distDir] folder so the behavior is consistent in development.
   /// Note that the dist directory must exist so you might need to build your frontend assets first.
   pub fn get(&self, path: String) -> Option<Asset> {
+    let use_https_scheme = self
+      .manager
+      .webviews()
+      .values()
+      .all(|webview| webview.use_https_scheme());
+    self.get_for_scheme(path, use_https_scheme)
+  }
+
+  ///  Same as [AssetResolver::get] but resolves the custom protocol scheme based on a parameter.
+  ///
+  /// - `use_https_scheme`: If `true` when using [`Pattern::Isolation`](tauri::Pattern::Isolation),
+  ///   the csp header will contain `https://tauri.localhost` instead of `http://tauri.localhost`
+  pub fn get_for_scheme(&self, path: String, use_https_scheme: bool) -> Option<Asset> {
     #[cfg(dev)]
     {
       // on dev if the devPath is a path to a directory we have the embedded assets
@@ -305,11 +322,11 @@ impl<R: Runtime> AssetResolver<R> {
       }
     }
 
-    self.manager.get_asset(path).ok()
+    self.manager.get_asset(path, use_https_scheme).ok()
   }
 
   /// Iterate on all assets.
-  pub fn iter(&self) -> Box<dyn Iterator<Item = (&str, &[u8])> + '_> {
+  pub fn iter(&self) -> Box<AssetsIter<'_>> {
     self.manager.assets.iter()
   }
 }
@@ -365,7 +382,7 @@ impl<R: Runtime> Clone for AppHandle<R> {
 impl<'de, R: Runtime> CommandArg<'de, R> for AppHandle<R> {
   /// Grabs the [`Window`] from the [`CommandItem`] and returns the associated [`AppHandle`]. This will never fail.
   fn from_command(command: CommandItem<'de, R>) -> std::result::Result<Self, InvokeError> {
-    Ok(command.message.webview().window().app_handle)
+    Ok(command.message.webview().app_handle)
   }
 }
 
@@ -686,6 +703,31 @@ macro_rules! shared_app_impl {
         })
       }
 
+      /// Set the app theme.
+      pub fn set_theme(&self, theme: Option<Theme>) {
+        #[cfg(windows)]
+        for window in self.manager.windows().values() {
+          if let (Some(menu), Ok(hwnd)) = (window.menu(), window.hwnd()) {
+            let raw_hwnd = hwnd.0 as isize;
+            let _ = self.run_on_main_thread(move || {
+              let _ = unsafe {
+                menu.inner().set_theme_for_hwnd(
+                  raw_hwnd,
+                  theme
+                    .map(crate::menu::map_to_menu_theme)
+                    .unwrap_or(muda::MenuTheme::Auto),
+                )
+              };
+            });
+          };
+        }
+        match self.runtime() {
+          RuntimeOrDispatch::Runtime(h) => h.set_theme(theme),
+          RuntimeOrDispatch::RuntimeHandle(h) => h.set_theme(theme),
+          _ => unreachable!(),
+        }
+      }
+
       /// Returns the default window icon.
       pub fn default_window_icon(&self) -> Option<&Image<'_>> {
         self.manager.window.default_icon.as_ref()
@@ -854,6 +896,15 @@ macro_rules! shared_app_impl {
           webview.resources_table().clear();
         }
       }
+
+      /// Gets the invoke key that must be referenced when using [`crate::webview::InvokeRequest`].
+      ///
+      /// # Security
+      ///
+      /// DO NOT expose this key to third party scripts as might grant access to the backend from external URLs and iframes.
+      pub fn invoke_key(&self) -> &str {
+        self.manager.invoke_key()
+      }
     }
 
     impl<R: Runtime> Listener<R> for $app {
@@ -877,7 +928,8 @@ macro_rules! shared_app_impl {
       where
         F: Fn(Event) + Send + 'static,
       {
-        self.manager.listen(event.into(), EventTarget::App, handler)
+        let event = EventName::new(event.into()).unwrap();
+        self.manager.listen(event, EventTarget::App, handler)
       }
 
       /// Listen to an event on this app only once.
@@ -887,7 +939,8 @@ macro_rules! shared_app_impl {
       where
         F: FnOnce(Event) + Send + 'static,
       {
-        self.manager.once(event.into(), EventTarget::App, handler)
+        let event = EventName::new(event.into()).unwrap();
+        self.manager.once(event, EventTarget::App, handler)
       }
 
       /// Unlisten to an event on this app.
@@ -914,79 +967,7 @@ macro_rules! shared_app_impl {
       }
     }
 
-    impl<R: Runtime> Emitter<R> for $app {
-      /// Emits an event to all [targets](EventTarget).
-      ///
-      /// # Examples
-      /// ```
-      /// use tauri::Emitter;
-      ///
-      /// #[tauri::command]
-      /// fn synchronize(app: tauri::AppHandle) {
-      ///   // emits the synchronized event to all webviews
-      ///   app.emit("synchronized", ());
-      /// }
-      /// ```
-      fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<()> {
-        self.manager.emit(event, payload)
-      }
-
-      /// Emits an event to all [targets](EventTarget) matching the given target.
-      ///
-      /// # Examples
-      /// ```
-      /// use tauri::{Emitter, EventTarget};
-      ///
-      /// #[tauri::command]
-      /// fn download(app: tauri::AppHandle) {
-      ///   for i in 1..100 {
-      ///     std::thread::sleep(std::time::Duration::from_millis(150));
-      ///     // emit a download progress event to all listeners
-      ///     app.emit_to(EventTarget::any(), "download-progress", i);
-      ///     // emit an event to listeners that used App::listen or AppHandle::listen
-      ///     app.emit_to(EventTarget::app(), "download-progress", i);
-      ///     // emit an event to any webview/window/webviewWindow matching the given label
-      ///     app.emit_to("updater", "download-progress", i); // similar to using EventTarget::labeled
-      ///     app.emit_to(EventTarget::labeled("updater"), "download-progress", i);
-      ///     // emit an event to listeners that used WebviewWindow::listen
-      ///     app.emit_to(EventTarget::webview_window("updater"), "download-progress", i);
-      ///   }
-      /// }
-      /// ```
-      fn emit_to<I, S>(&self, target: I, event: &str, payload: S) -> Result<()>
-      where
-        I: Into<EventTarget>,
-        S: Serialize + Clone,
-      {
-        self.manager.emit_to(target, event, payload)
-      }
-
-      /// Emits an event to all [targets](EventTarget) based on the given filter.
-      ///
-      /// # Examples
-      /// ```
-      /// use tauri::{Emitter, EventTarget};
-      ///
-      /// #[tauri::command]
-      /// fn download(app: tauri::AppHandle) {
-      ///   for i in 1..100 {
-      ///     std::thread::sleep(std::time::Duration::from_millis(150));
-      ///     // emit a download progress event to the updater window
-      ///     app.emit_filter("download-progress", i, |t| match t {
-      ///       EventTarget::WebviewWindow { label } => label == "main",
-      ///       _ => false,
-      ///     });
-      ///   }
-      /// }
-      /// ```
-      fn emit_filter<S, F>(&self, event: &str, payload: S, filter: F) -> Result<()>
-      where
-        S: Serialize + Clone,
-        F: Fn(&EventTarget) -> bool,
-      {
-        self.manager.emit_filter(event, payload, filter)
-      }
-    }
+    impl<R: Runtime> Emitter<R> for $app {}
   };
 }
 
@@ -1169,11 +1150,10 @@ pub struct Builder<R: Runtime> {
   /// The JS message handler.
   invoke_handler: Box<InvokeHandler<R>>,
 
-  /// The JS message responder.
-  invoke_responder: Option<Arc<InvokeResponder<R>>>,
-
   /// The script that initializes the `window.__TAURI_INTERNALS__.postMessage` function.
   pub(crate) invoke_initialization_script: String,
+
+  channel_interceptor: Option<ChannelInterceptor<R>>,
 
   /// The setup hook.
   setup: SetupHook<R>,
@@ -1193,6 +1173,14 @@ pub struct Builder<R: Runtime> {
   /// A closure that returns the menu set to all windows.
   #[cfg(desktop)]
   menu: Option<Box<dyn FnOnce(&AppHandle<R>) -> crate::Result<Menu<R>> + Send>>,
+
+  /// Menu event listeners for any menu event.
+  #[cfg(desktop)]
+  menu_event_listeners: Vec<GlobalMenuEventListener<AppHandle<R>>>,
+
+  /// Tray event listeners for any tray icon event.
+  #[cfg(all(desktop, feature = "tray-icon"))]
+  tray_icon_event_listeners: Vec<GlobalTrayIconEventListener<AppHandle<R>>>,
 
   /// Enable macOS default menu creation.
   #[allow(unused)]
@@ -1218,7 +1206,6 @@ pub(crate) struct InvokeInitializationScript<'a> {
   pub(crate) process_ipc_message_fn: &'a str,
   pub(crate) os_name: &'a str,
   pub(crate) fetch_channel_data_command: &'a str,
-  pub(crate) linux_ipc_protocol_enabled: bool,
   pub(crate) invoke_key: &'a str,
 }
 
@@ -1249,23 +1236,26 @@ impl<R: Runtime> Builder<R> {
       runtime_any_thread: false,
       setup: Box::new(|_| Ok(())),
       invoke_handler: Box::new(|_| false),
-      invoke_responder: None,
       invoke_initialization_script: InvokeInitializationScript {
         process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
         os_name: std::env::consts::OS,
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
-        linux_ipc_protocol_enabled: cfg!(feature = "linux-ipc-protocol"),
         invoke_key: &invoke_key.clone(),
       }
       .render_default(&Default::default())
       .unwrap()
       .into_string(),
+      channel_interceptor: None,
       on_page_load: None,
       plugins: PluginStore::default(),
       uri_scheme_protocols: Default::default(),
       state: StateManager::new(),
       #[cfg(desktop)]
       menu: None,
+      #[cfg(desktop)]
+      menu_event_listeners: Vec::new(),
+      #[cfg(all(desktop, feature = "tray-icon"))]
+      tray_icon_event_listeners: Vec::new(),
       enable_macos_default_menu: true,
       window_event_listeners: Vec::new(),
       webview_event_listeners: Vec::new(),
@@ -1314,17 +1304,42 @@ impl<R: Runtime> Builder<R> {
 
   /// Defines a custom JS message system.
   ///
-  /// The `responder` is a function that will be called when a command has been executed and must send a response to the JS layer.
-  ///
   /// The `initialization_script` is a script that initializes `window.__TAURI_INTERNALS__.postMessage`.
   /// That function must take the `(message: object, options: object)` arguments and send it to the backend.
+  ///
+  /// Additionally, the script must include a `__INVOKE_KEY__` token that is replaced with a value that must be sent with the IPC payload
+  /// to check the integrity of the message by the [`crate::WebviewWindow::on_message`] API, e.g.
+  ///
+  /// ```js
+  /// const invokeKey = __INVOKE_KEY__;
+  /// fetch('my-impl://command', {
+  ///   headers: {
+  ///     'Tauri-Invoke-Key': invokeKey,
+  ///   }
+  /// })
+  /// ```
+  ///
+  /// Note that the implementation details is up to your implementation.
   #[must_use]
-  pub fn invoke_system<F>(mut self, initialization_script: String, responder: F) -> Self
-  where
-    F: Fn(&Webview<R>, &str, &InvokeResponse, CallbackFn, CallbackFn) + Send + Sync + 'static,
-  {
-    self.invoke_initialization_script = initialization_script;
-    self.invoke_responder.replace(Arc::new(responder));
+  pub fn invoke_system(mut self, initialization_script: String) -> Self {
+    self.invoke_initialization_script =
+      initialization_script.replace("__INVOKE_KEY__", &format!("\"{}\"", self.invoke_key));
+    self
+  }
+
+  /// Registers a channel interceptor that can overwrite the default channel implementation.
+  ///
+  /// If the event has been consumed, it must return `true`.
+  ///
+  /// The channel automatically orders the messages, so the third closure argument represents the message number.
+  /// The payload expected by the channel receiver is in the form of `{ id: usize, message: T }`.
+  pub fn channel_interceptor<
+    F: Fn(&Webview<R>, CallbackFn, usize, &InvokeResponseBody) -> bool + Send + Sync + 'static,
+  >(
+    mut self,
+    interceptor: F,
+  ) -> Self {
+    self.channel_interceptor.replace(Box::new(interceptor));
     self
   }
 
@@ -1579,6 +1594,52 @@ tauri::Builder::default()
     self
   }
 
+  /// Registers an event handler for any menu event.
+  ///
+  /// # Examples
+  /// ```
+  /// use tauri::menu::*;
+  ///
+  /// tauri::Builder::default()
+  ///   .on_menu_event(|app, event| {
+  ///      if event.id() == "quit" {
+  ///        app.exit(0);
+  ///      }
+  ///   });
+  /// ```
+  #[must_use]
+  #[cfg(desktop)]
+  pub fn on_menu_event<F: Fn(&AppHandle<R>, MenuEvent) + Send + Sync + 'static>(
+    mut self,
+    f: F,
+  ) -> Self {
+    self.menu_event_listeners.push(Box::new(f));
+    self
+  }
+
+  /// Registers an event handler for any tray icon event.
+  ///
+  /// # Examples
+  /// ```
+  /// use tauri::Manager;
+  ///
+  /// tauri::Builder::default()
+  ///   .on_tray_icon_event(|app, event| {
+  ///      let tray = app.tray_by_id(event.id()).expect("can't find tray icon");
+  ///      let _ = tray.set_visible(false);
+  ///   });
+  /// ```
+  #[must_use]
+  #[cfg(all(desktop, feature = "tray-icon"))]
+  #[cfg_attr(docsrs, doc(cfg(all(desktop, feature = "tray-icon"))))]
+  pub fn on_tray_icon_event<F: Fn(&AppHandle<R>, TrayIconEvent) + Send + Sync + 'static>(
+    mut self,
+    f: F,
+  ) -> Self {
+    self.tray_icon_event_listeners.push(Box::new(f));
+    self
+  }
+
   /// Enable or disable the default menu on macOS. Enabled by default.
   ///
   /// # Examples
@@ -1638,6 +1699,7 @@ tauri::Builder::default()
   }
 
   /// Registers a URI scheme protocol available to all webviews.
+  ///
   /// Leverages [setURLSchemeHandler](https://developer.apple.com/documentation/webkit/wkwebviewconfiguration/2875766-seturlschemehandler) on macOS,
   /// [AddWebResourceRequestedFilter](https://docs.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2.addwebresourcerequestedfilter?view=webview2-dotnet-1.0.774.44) on Windows
   /// and [webkit-web-context-register-uri-scheme](https://webkitgtk.org/reference/webkit2gtk/stable/WebKitWebContext.html#webkit-web-context-register-uri-scheme) on Linux.
@@ -1650,7 +1712,7 @@ tauri::Builder::default()
   /// # Examples
   /// ```
   /// tauri::Builder::default()
-  ///   .register_uri_scheme_protocol("app-files", |_app, request| {
+  ///   .register_uri_scheme_protocol("app-files", |_ctx, request| {
   ///     // skip leading `/`
   ///     if let Ok(data) = std::fs::read(&request.uri().path()[1..]) {
   ///       http::Response::builder()
@@ -1669,7 +1731,10 @@ tauri::Builder::default()
   pub fn register_uri_scheme_protocol<
     N: Into<String>,
     T: Into<Cow<'static, [u8]>>,
-    H: Fn(&AppHandle<R>, http::Request<Vec<u8>>) -> http::Response<T> + Send + Sync + 'static,
+    H: Fn(UriSchemeContext<'_, R>, http::Request<Vec<u8>>) -> http::Response<T>
+      + Send
+      + Sync
+      + 'static,
   >(
     mut self,
     uri_scheme: N,
@@ -1678,8 +1743,8 @@ tauri::Builder::default()
     self.uri_scheme_protocols.insert(
       uri_scheme.into(),
       Arc::new(UriSchemeProtocol {
-        protocol: Box::new(move |app, request, responder| {
-          responder.respond(protocol(app, request))
+        protocol: Box::new(move |ctx, request, responder| {
+          responder.respond(protocol(ctx, request))
         }),
       }),
     );
@@ -1697,7 +1762,7 @@ tauri::Builder::default()
   /// # Examples
   /// ```
   /// tauri::Builder::default()
-  ///   .register_asynchronous_uri_scheme_protocol("app-files", |_app, request, responder| {
+  ///   .register_asynchronous_uri_scheme_protocol("app-files", |_ctx, request, responder| {
   ///     // skip leading `/`
   ///     let path = request.uri().path()[1..].to_string();
   ///     std::thread::spawn(move || {
@@ -1722,7 +1787,7 @@ tauri::Builder::default()
   #[must_use]
   pub fn register_asynchronous_uri_scheme_protocol<
     N: Into<String>,
-    H: Fn(&AppHandle<R>, http::Request<Vec<u8>>, UriSchemeResponder) + Send + Sync + 'static,
+    H: Fn(UriSchemeContext<'_, R>, http::Request<Vec<u8>>, UriSchemeResponder) + Send + Sync + 'static,
   >(
     mut self,
     uri_scheme: N,
@@ -1780,11 +1845,16 @@ tauri::Builder::default()
       self.on_page_load,
       self.uri_scheme_protocols,
       self.state,
+      #[cfg(desktop)]
+      self.menu_event_listeners,
+      #[cfg(all(desktop, feature = "tray-icon"))]
+      self.tray_icon_event_listeners,
       self.window_event_listeners,
       self.webview_event_listeners,
       #[cfg(desktop)]
       HashMap::new(),
-      (self.invoke_responder, self.invoke_initialization_script),
+      self.invoke_initialization_script,
+      self.channel_interceptor,
       self.invoke_key,
     ));
 
@@ -1932,10 +2002,12 @@ tauri::Builder::default()
     {
       let config = app.config();
       if let Some(tray_config) = &config.app.tray_icon {
+        #[allow(deprecated)]
         let mut tray =
           TrayIconBuilder::with_id(tray_config.id.clone().unwrap_or_else(|| "main".into()))
             .icon_as_template(tray_config.icon_as_template)
-            .menu_on_left_click(tray_config.menu_on_left_click);
+            .menu_on_left_click(tray_config.menu_on_left_click)
+            .show_menu_on_left_click(tray_config.show_menu_on_left_click);
         if let Some(icon) = &app.manager.tray.icon {
           tray = tray.icon(icon.clone());
         }
@@ -1971,6 +2043,24 @@ impl UriSchemeResponder {
   pub fn respond<T: Into<Cow<'static, [u8]>>>(self, response: http::Response<T>) {
     let (parts, body) = response.into_parts();
     (self.0)(http::Response::from_parts(parts, body.into()))
+  }
+}
+
+/// Uri scheme protocol context
+pub struct UriSchemeContext<'a, R: Runtime> {
+  pub(crate) app_handle: &'a AppHandle<R>,
+  pub(crate) webview_label: &'a str,
+}
+
+impl<'a, R: Runtime> UriSchemeContext<'a, R> {
+  /// Get a reference to an [`AppHandle`].
+  pub fn app_handle(&self) -> &'a AppHandle<R> {
+    self.app_handle
+  }
+
+  /// Get the webview label that made the uri scheme request.
+  pub fn webview_label(&self) -> &'a str {
+    self.webview_label
   }
 }
 
@@ -2012,8 +2102,8 @@ impl<R: Runtime> HasDisplayHandle for App<R> {
 fn setup<R: Runtime>(app: &mut App<R>) -> crate::Result<()> {
   app.ran_setup = true;
 
-  for window_config in app.config().app.windows.clone() {
-    WebviewWindowBuilder::from_config(app.handle(), &window_config)?.build()?;
+  for window_config in app.config().app.windows.iter().filter(|w| w.create) {
+    WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
   }
 
   app.manager.assets.setup(app);
@@ -2055,22 +2145,18 @@ fn on_event_loop_event<R: Runtime>(
     RuntimeRunEvent::Ready => {
       // set the app icon in development
       #[cfg(all(dev, target_os = "macos"))]
-      unsafe {
-        use cocoa::{
-          appkit::NSImage,
-          base::{id, nil},
-          foundation::NSData,
-        };
-        use objc::*;
+      {
+        use objc2::ClassType;
+        use objc2_app_kit::{NSApplication, NSImage};
+        use objc2_foundation::{MainThreadMarker, NSData};
+
         if let Some(icon) = app_handle.manager.app_icon.clone() {
-          let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
-          let data = NSData::dataWithBytes_length_(
-            nil,
-            icon.as_ptr() as *const std::os::raw::c_void,
-            icon.len() as u64,
-          );
-          let app_icon = NSImage::initWithData_(NSImage::alloc(nil), data);
-          let _: () = msg_send![ns_app, setApplicationIconImage: app_icon];
+          // TODO: Enable this check.
+          let mtm = unsafe { MainThreadMarker::new_unchecked() };
+          let app = NSApplication::sharedApplication(mtm);
+          let data = NSData::with_bytes(&icon);
+          let app_icon = NSImage::initWithData(NSImage::alloc(), &data).expect("creating icon");
+          unsafe { app.setApplicationIconImage(Some(&app_icon)) };
         }
       }
       RunEvent::Ready

@@ -5,12 +5,8 @@
 use heck::AsShoutySnakeCase;
 use tauri_utils::write_if_changed;
 
-use std::env::var_os;
-use std::fs::create_dir_all;
-use std::fs::read_dir;
-use std::fs::read_to_string;
 use std::{
-  env::var,
+  env, fs,
   path::{Path, PathBuf},
   sync::{Mutex, OnceLock},
 };
@@ -18,7 +14,6 @@ use std::{
 static CHECKED_FEATURES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 const PLUGINS: &[(&str, &[(&str, bool)])] = &[
   // (plugin_name, &[(command, enabled-by_default)])
-  // note that when adding new core plugins, they must be added to the ACL resolver aswell
   (
     "core:path",
     &[
@@ -62,6 +57,7 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       ("is_minimizable", true),
       ("is_closable", true),
       ("is_visible", true),
+      ("is_enabled", true),
       ("title", true),
       ("current_monitor", true),
       ("primary_monitor", true),
@@ -72,6 +68,7 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       // setters
       ("center", false),
       ("request_user_attention", false),
+      ("set_enabled", false),
       ("set_resizable", false),
       ("set_maximizable", false),
       ("set_minimizable", false),
@@ -108,9 +105,14 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       ("start_dragging", false),
       ("start_resize_dragging", false),
       ("set_progress_bar", false),
+      ("set_badge_count", false),
+      ("set_overlay_icon", false),
+      ("set_badge_label", false),
       ("set_icon", false),
       ("set_title_bar_style", false),
+      ("set_theme", false),
       ("toggle_maximize", false),
+      ("set_background_color", false),
       // internal
       ("internal_toggle_maximize", true),
     ],
@@ -130,8 +132,12 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       ("set_webview_position", false),
       ("set_webview_focus", false),
       ("set_webview_zoom", false),
+      ("webview_hide", false),
+      ("webview_show", false),
       ("print", false),
       ("reparent", false),
+      ("clear_all_browsing_data", false),
+      ("set_webview_background_color", false),
       // internal
       ("internal_toggle_devtools", true),
     ],
@@ -145,6 +151,7 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       ("app_show", false),
       ("app_hide", false),
       ("default_window_icon", false),
+      ("set_app_theme", false),
     ],
   ),
   (
@@ -240,7 +247,7 @@ fn main() {
   alias("desktop", !mobile);
   alias("mobile", mobile);
 
-  let out_dir = PathBuf::from(var("OUT_DIR").unwrap());
+  let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
   let checked_features_out_path = out_dir.join("checked_features");
   std::fs::write(
@@ -252,19 +259,19 @@ fn main() {
   // workaround needed to prevent `STATUS_ENTRYPOINT_NOT_FOUND` error in tests
   // see https://github.com/tauri-apps/tauri/pull/4383#issuecomment-1212221864
   let target_env = std::env::var("CARGO_CFG_TARGET_ENV");
-  let is_tauri_workspace = std::env::var("__TAURI_WORKSPACE__").map_or(false, |v| v == "true");
+  let is_tauri_workspace = std::env::var("__TAURI_WORKSPACE__").is_ok_and(|v| v == "true");
   if is_tauri_workspace && target_os == "windows" && Ok("msvc") == target_env.as_deref() {
     embed_manifest_for_tests();
   }
 
   if target_os == "android" {
-    if let Ok(kotlin_out_dir) = std::env::var("WRY_ANDROID_KOTLIN_FILES_OUT_DIR") {
-      fn env_var(var: &str) -> String {
-        std::env::var(var).unwrap_or_else(|_| {
-          panic!("`{var}` is not set, which is needed to generate the kotlin files for android.")
-        })
-      }
+    fn env_var(var: &str) -> String {
+      std::env::var(var).unwrap_or_else(|_| {
+        panic!("`{var}` is not set, which is needed to generate the kotlin files for android.")
+      })
+    }
 
+    if let Ok(kotlin_out_dir) = std::env::var("WRY_ANDROID_KOTLIN_FILES_OUT_DIR") {
       let package = env_var("WRY_ANDROID_PACKAGE");
       let library = env_var("WRY_ANDROID_LIBRARY");
 
@@ -278,12 +285,12 @@ fn main() {
         PathBuf::from(env_var("CARGO_MANIFEST_DIR")).join("mobile/android-codegen");
       println!("cargo:rerun-if-changed={}", kotlin_files_path.display());
       let kotlin_files =
-        read_dir(kotlin_files_path).expect("failed to read Android codegen directory");
+        fs::read_dir(kotlin_files_path).expect("failed to read Android codegen directory");
 
       for file in kotlin_files {
         let file = file.unwrap();
 
-        let content = read_to_string(file.path())
+        let content = fs::read_to_string(file.path())
           .expect("failed to read kotlin file as string")
           .replace("{{package}}", &package)
           .replace("{{library}}", &library);
@@ -296,11 +303,11 @@ fn main() {
       }
     }
 
-    if let Some(project_dir) = var_os("TAURI_ANDROID_PROJECT_PATH").map(PathBuf::from) {
-      let tauri_proguard = include_str!("./mobile/proguard-tauri.pro").replace(
-        "$PACKAGE",
-        &var("WRY_ANDROID_PACKAGE").expect("missing `WRY_ANDROID_PACKAGE` environment variable"),
-      );
+    if let Some(project_dir) = env::var_os("TAURI_ANDROID_PROJECT_PATH").map(PathBuf::from) {
+      let package_unescaped = env::var("TAURI_ANDROID_PACKAGE_UNESCAPED")
+        .unwrap_or_else(|_| env_var("WRY_ANDROID_PACKAGE").replace('`', ""));
+      let tauri_proguard =
+        include_str!("./mobile/proguard-tauri.pro").replace("$PACKAGE", &package_unescaped);
       std::fs::write(
         project_dir.join("app").join("proguard-tauri.pro"),
         tauri_proguard,
@@ -326,12 +333,12 @@ fn main() {
   define_permissions(&out_dir);
 }
 
-fn define_permissions(out_dir: &Path) {
-  let license_header = r"# Copyright 2019-2024 Tauri Programme within The Commons Conservancy
+const LICENSE_HEADER: &str = r"# Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-License-Identifier: MIT
 ";
 
+fn define_permissions(out_dir: &Path) {
   for (plugin, commands) in PLUGINS {
     let plugin_directory_name = plugin.strip_prefix("core:").unwrap_or(plugin);
     let permissions_out_dir = out_dir.join("permissions").join(plugin_directory_name);
@@ -342,7 +349,7 @@ fn define_permissions(out_dir: &Path) {
     tauri_utils::acl::build::autogenerate_command_permissions(
       &commands_dir,
       &commands.iter().map(|(cmd, _)| *cmd).collect::<Vec<_>>(),
-      license_header,
+      LICENSE_HEADER,
       false,
     );
     let default_permissions = commands
@@ -356,7 +363,7 @@ fn define_permissions(out_dir: &Path) {
       .join(", ");
 
     let default_toml = format!(
-      r###"{license_header}# Automatically generated - DO NOT EDIT!
+      r###"{LICENSE_HEADER}# Automatically generated - DO NOT EDIT!
 
 [default]
 description = "Default permissions for the plugin."
@@ -365,16 +372,16 @@ permissions = [{default_permissions}]
     );
 
     let out_path = autogenerated.join("default.toml");
-    if default_toml != read_to_string(&out_path).unwrap_or_default() {
-      std::fs::write(out_path, default_toml)
-        .unwrap_or_else(|_| panic!("unable to autogenerate default permissions"));
-    }
+    write_if_changed(out_path, default_toml)
+      .unwrap_or_else(|_| panic!("unable to autogenerate default permissions"));
 
     let permissions = tauri_utils::acl::build::define_permissions(
-      &permissions_out_dir
-        .join("**")
-        .join("*.toml")
-        .to_string_lossy(),
+      &PathBuf::from(glob::Pattern::escape(
+        &permissions_out_dir.to_string_lossy(),
+      ))
+      .join("**")
+      .join("*.toml")
+      .to_string_lossy(),
       &format!("tauri:{plugin}"),
       out_dir,
       |_| true,
@@ -384,7 +391,7 @@ permissions = [{default_permissions}]
     let docs_out_dir = Path::new("permissions")
       .join(plugin_directory_name)
       .join("autogenerated");
-    create_dir_all(&docs_out_dir).expect("failed to create plugin documentation directory");
+    fs::create_dir_all(&docs_out_dir).expect("failed to create plugin documentation directory");
     tauri_utils::acl::build::generate_docs(
       &permissions,
       &docs_out_dir,
@@ -392,6 +399,51 @@ permissions = [{default_permissions}]
     )
     .expect("failed to generate plugin documentation page");
   }
+
+  define_default_permission_set(out_dir);
+}
+
+fn define_default_permission_set(out_dir: &Path) {
+  let permissions_out_dir = out_dir.join("permissions");
+  fs::create_dir_all(&permissions_out_dir)
+    .expect("failed to create core:default permissions directory");
+
+  let default_toml = permissions_out_dir.join("default.toml");
+  let toml_content = format!(
+    r#"# {LICENSE_HEADER}
+
+[default]
+description = """Default core plugins set which includes:
+{}
+"""
+permissions = [{}]
+"#,
+    PLUGINS
+      .iter()
+      .map(|(k, _)| format!("- '{k}:default'"))
+      .collect::<Vec<_>>()
+      .join("\n"),
+    PLUGINS
+      .iter()
+      .map(|(k, _)| format!("'{k}:default'"))
+      .collect::<Vec<_>>()
+      .join(",")
+  );
+
+  write_if_changed(default_toml, toml_content)
+    .unwrap_or_else(|_| panic!("unable to autogenerate core:default set"));
+
+  let _ = tauri_utils::acl::build::define_permissions(
+    &PathBuf::from(glob::Pattern::escape(
+      &permissions_out_dir.to_string_lossy(),
+    ))
+    .join("*.toml")
+    .to_string_lossy(),
+    "tauri:core",
+    out_dir,
+    |_| true,
+  )
+  .unwrap_or_else(|e| panic!("failed to define permissions for `core:default` : {e}"));
 }
 
 fn embed_manifest_for_tests() {

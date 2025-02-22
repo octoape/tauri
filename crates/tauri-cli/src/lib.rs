@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-//! [![](https://github.com/tauri-apps/tauri/raw/dev/.github/splash.png)](https://tauri.app)
-//!
 //! This Rust executable provides the full interface to all of the required activities for which the CLI is required. It will run on macOS, Windows, and Linux.
 
 #![doc(
@@ -25,10 +23,12 @@ mod helpers;
 mod icon;
 mod info;
 mod init;
+mod inspect;
 mod interface;
 mod migrate;
 mod mobile;
 mod plugin;
+mod remove;
 mod signer;
 
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -145,12 +145,14 @@ enum Commands {
   Migrate,
   Info(info::Options),
   Add(add::Options),
+  Remove(remove::Options),
   Plugin(plugin::Cli),
   Icon(icon::Options),
   Signer(signer::Cli),
   Completions(completions::Options),
   Permission(acl::permission::Cli),
   Capability(acl::capability::Cli),
+  Inspect(inspect::Cli),
 }
 
 fn format_error<I: CommandFactory>(err: clap::Error) -> clap::Error {
@@ -214,10 +216,17 @@ where
     Err(e) => e.exit(),
   };
 
+  let verbosity_number = std::env::var("TAURI_CLI_VERBOSITY")
+    .ok()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(cli.verbose);
+  // set the verbosity level so subsequent CLI calls (xcode-script, android-studio-script) refer to it
+  std::env::set_var("TAURI_CLI_VERBOSITY", verbosity_number.to_string());
+
   let mut builder = Builder::from_default_env();
   let init_res = builder
     .format_indent(Some(12))
-    .filter(None, verbosity_level(cli.verbose).to_level_filter())
+    .filter(None, verbosity_level(verbosity_number).to_level_filter())
     .format(|f, record| {
       let mut is_command_output = false;
       if let Some(action) = record.key_values().get("action".into()) {
@@ -256,6 +265,7 @@ where
     Commands::Bundle(options) => bundle::command(options, cli.verbose)?,
     Commands::Dev(options) => dev::command(options)?,
     Commands::Add(options) => add::command(options)?,
+    Commands::Remove(options) => remove::command(options)?,
     Commands::Icon(options) => icon::command(options)?,
     Commands::Info(options) => info::command(options)?,
     Commands::Init(options) => init::command(options)?,
@@ -268,6 +278,7 @@ where
     #[cfg(target_os = "macos")]
     Commands::Ios(c) => mobile::ios::command(c, cli.verbose)?,
     Commands::Migrate => migrate::command()?,
+    Commands::Inspect(cli) => inspect::command(cli)?,
   }
 
   Ok(())
@@ -371,5 +382,17 @@ impl CommandExt for Command {
     } else {
       Err(anyhow::anyhow!("failed to run {}", program))
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use clap::CommandFactory;
+
+  use crate::Cli;
+
+  #[test]
+  fn verify_cli() {
+    Cli::command().debug_assert();
   }
 }

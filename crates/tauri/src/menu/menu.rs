@@ -21,6 +21,11 @@ pub const WINDOW_SUBMENU_ID: &str = "__tauri_window_menu__";
 pub const HELP_SUBMENU_ID: &str = "__tauri_help_menu__";
 
 impl<R: Runtime> super::ContextMenu for Menu<R> {
+  #[cfg(target_os = "windows")]
+  fn hpopupmenu(&self) -> crate::Result<isize> {
+    run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().hpopupmenu())
+  }
+
   fn popup<T: Runtime>(&self, window: Window<T>) -> crate::Result<()> {
     self.popup_inner(window, None::<Position>)
   }
@@ -44,9 +49,11 @@ impl<R: Runtime> ContextMenuBase for Menu<R> {
     run_item_main_thread!(self, move |self_: Self| {
       #[cfg(target_os = "macos")]
       if let Ok(view) = window.ns_view() {
-        self_
-          .inner()
-          .show_context_menu_for_nsview(view as _, position);
+        unsafe {
+          self_
+            .inner()
+            .show_context_menu_for_nsview(view as _, position);
+        }
       }
 
       #[cfg(any(
@@ -64,9 +71,11 @@ impl<R: Runtime> ContextMenuBase for Menu<R> {
 
       #[cfg(windows)]
       if let Ok(hwnd) = window.hwnd() {
-        self_
-          .inner()
-          .show_context_menu_for_hwnd(hwnd.0 as _, position)
+        unsafe {
+          self_
+            .inner()
+            .show_context_menu_for_hwnd(hwnd.0 as _, position)
+        }
       }
     })
   }
@@ -262,9 +271,9 @@ impl<R: Runtime> Menu<R> {
   /// [`Submenu`]: super::Submenu
   pub fn append(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .append(kind.inner().inner_muda()))?
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().append(kind.inner().inner_muda())
+    })?
     .map_err(Into::into)
   }
 
@@ -292,9 +301,9 @@ impl<R: Runtime> Menu<R> {
   /// [`Submenu`]: super::Submenu
   pub fn prepend(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .prepend(kind.inner().inner_muda()))?
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().prepend(kind.inner().inner_muda())
+    })?
     .map_err(Into::into)
   }
 
@@ -342,18 +351,20 @@ impl<R: Runtime> Menu<R> {
   /// Remove a menu item from this menu.
   pub fn remove(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .remove(kind.inner().inner_muda()))?
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().remove(kind.inner().inner_muda())
+    })?
     .map_err(Into::into)
   }
 
   /// Remove the menu item at the specified position from this menu and returns it.
   pub fn remove_at(&self, position: usize) -> crate::Result<Option<MenuItemKind<R>>> {
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .remove_at(position)
-      .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i)))
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0)
+        .as_ref()
+        .remove_at(position)
+        .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
+    })
   }
 
   /// Retrieves the menu item matching the given identifier.
@@ -371,12 +382,14 @@ impl<R: Runtime> Menu<R> {
 
   /// Returns a list of menu items that has been added to this menu.
   pub fn items(&self) -> crate::Result<Vec<MenuItemKind<R>>> {
-    run_item_main_thread!(self, |self_: Self| (*self_.0)
-      .as_ref()
-      .items()
-      .into_iter()
-      .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
-      .collect::<Vec<_>>())
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0)
+        .as_ref()
+        .items()
+        .into_iter()
+        .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
+        .collect::<Vec<_>>()
+    })
   }
 
   /// Set this menu as the application menu.
