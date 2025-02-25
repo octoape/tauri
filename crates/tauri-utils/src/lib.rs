@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-//! [![](https://github.com/tauri-apps/tauri/raw/dev/.github/splash.png)](https://tauri.app)
-//!
 //! This crate contains common code that is reused in many places and offers useful utilities like parsing configuration files, detecting platform triples, injecting the CSP, and managing assets.
 
 #![doc(
@@ -362,7 +360,7 @@ pub enum Error {
   Glob(#[from] glob::GlobError),
   /// Glob pattern did not find any results.
   #[cfg(feature = "resources")]
-  #[error("path matching {0} not found.")]
+  #[error("glob pattern {0} path not found or didn't match any files.")]
   GlobPathNotFound(String),
   /// Error walking directory.
   #[cfg(feature = "resources")]

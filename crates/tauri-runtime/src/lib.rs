@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-//! [![](https://github.com/tauri-apps/tauri/raw/dev/.github/splash.png)](https://tauri.app)
-//!
 //! Internal runtime between Tauri and the underlying webview runtime.
 //!
 //! None of the exposed API of this crate is stable, and it may break semver
@@ -18,6 +16,7 @@
 use raw_window_handle::DisplayHandle;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fmt::Debug, sync::mpsc::Sender};
+use tauri_utils::config::Color;
 use tauri_utils::Theme;
 use url::Url;
 use webview::{DetachedWebview, PendingWebview};
@@ -311,6 +310,8 @@ pub trait RuntimeHandle<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 'st
 
   fn cursor_position(&self) -> Result<PhysicalPosition<f64>>;
 
+  fn set_theme(&self, theme: Option<Theme>);
+
   /// Shows the application, but does not automatically focus it.
   #[cfg(target_os = "macos")]
   #[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
@@ -401,6 +402,8 @@ pub trait Runtime<T: UserEvent>: Debug + Sized + 'static {
   fn available_monitors(&self) -> Vec<Monitor>;
 
   fn cursor_position(&self) -> Result<PhysicalPosition<f64>>;
+
+  fn set_theme(&self, theme: Option<Theme>);
 
   /// Sets the activation policy for the application.
   #[cfg(target_os = "macos")]
@@ -501,6 +504,12 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
   /// Bring the window to front and focus the webview.
   fn set_focus(&self) -> Result<()>;
 
+  /// Hide the webview
+  fn hide(&self) -> Result<()>;
+
+  /// Show the webview
+  fn show(&self) -> Result<()>;
+
   /// Executes javascript on the window this [`WindowDispatch`] represents.
   fn eval_script<S: Into<String>>(&self, script: S) -> Result<()>;
 
@@ -512,6 +521,12 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
 
   /// Set the webview zoom level
   fn set_zoom(&self, scale_factor: f64) -> Result<()>;
+
+  /// Set the webview background.
+  fn set_background_color(&self, color: Option<Color>) -> Result<()>;
+
+  /// Clear all browsing data for this webview.
+  fn clear_all_browsing_data(&self) -> Result<()>;
 }
 
 /// Window dispatcher. A thread-safe handle to the window APIs.
@@ -590,6 +605,10 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
 
   /// Gets the window's current visibility state.
   fn is_visible(&self) -> Result<bool>;
+
+  /// Whether the window is enabled or disable.
+  fn is_enabled(&self) -> Result<bool>;
+
   /// Gets the window's current title.
   fn title(&self) -> Result<String>;
 
@@ -663,6 +682,13 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
   /// Updates the window resizable flag.
   fn set_resizable(&self, resizable: bool) -> Result<()>;
 
+  /// Enable or disable the window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **Android / iOS**: Unsupported.
+  fn set_enabled(&self, enabled: bool) -> Result<()>;
+
   /// Updates the window's native maximize button state.
   ///
   /// ## Platform-specific
@@ -729,6 +755,9 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
   /// Updates the window visibleOnAllWorkspaces flag.
   fn set_visible_on_all_workspaces(&self, visible_on_all_workspaces: bool) -> Result<()>;
 
+  /// Set the window background.
+  fn set_background_color(&self, color: Option<Color>) -> Result<()>;
+
   /// Prevents the window contents from being captured by other apps.
   fn set_content_protected(&self, protected: bool) -> Result<()>;
 
@@ -785,6 +814,24 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
   /// Starts resize-dragging the window.
   fn start_resize_dragging(&self, direction: ResizeDirection) -> Result<()>;
 
+  /// Sets the badge count on the taskbar
+  /// The badge count appears as a whole for the application
+  /// Using `0` or using `None` will remove the badge
+  ///
+  /// ## Platform-specific
+  /// - **Windows:** Unsupported, use [`WindowDispatch::set_overlay_icon`] instead.
+  /// - **Android:** Unsupported.
+  /// - **iOS:** iOS expects i32, if the value is larger than i32::MAX, it will be clamped to i32::MAX.
+  fn set_badge_count(&self, count: Option<i64>, desktop_filename: Option<String>) -> Result<()>;
+
+  /// Sets the badge count on the taskbar **macOS only**. Using `None` will remove the badge
+  fn set_badge_label(&self, label: Option<String>) -> Result<()>;
+
+  /// Sets the overlay icon on the taskbar **Windows only**. Using `None` will remove the icon
+  ///
+  /// The overlay icon can be unique for each window.
+  fn set_overlay_icon(&self, icon: Option<Icon>) -> Result<()>;
+
   /// Sets the taskbar progress state.
   ///
   /// ## Platform-specific
@@ -799,4 +846,12 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
   ///
   /// - **Linux / Windows / iOS / Android:** Unsupported.
   fn set_title_bar_style(&self, style: tauri_utils::TitleBarStyle) -> Result<()>;
+
+  /// Sets the theme for this window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **Linux / macOS**: Theme is app-wide and not specific to this window.
+  /// - **iOS / Android:** Unsupported.
+  fn set_theme(&self, theme: Option<Theme>) -> Result<()>;
 }

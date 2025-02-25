@@ -40,6 +40,11 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 ) {
   #[allow(unused_mut)]
   let mut builder = builder
+    .plugin(
+      tauri_plugin_log::Builder::default()
+        .level(log::LevelFilter::Info)
+        .build(),
+    )
     .plugin(tauri_plugin_sample::init())
     .setup(move |app| {
       #[cfg(all(desktop, not(test)))]
@@ -140,7 +145,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
     .invoke_handler(tauri::generate_handler![
       cmd::log_operation,
       cmd::perform_request,
-      cmd::echo
+      cmd::echo,
+      cmd::spam,
     ])
     .build(tauri::tauri_build_context!())
     .expect("error while building tauri application");
