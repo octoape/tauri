@@ -10,6 +10,7 @@ use crate::app::{GlobalMenuEventListener, GlobalTrayIconEventListener};
 use crate::menu::ContextMenu;
 use crate::menu::MenuEvent;
 use crate::resources::Resource;
+use crate::UnsafeSend;
 use crate::{
   image::Image, menu::run_item_main_thread, AppHandle, Manager, PhysicalPosition, Rect, Runtime,
 };
@@ -75,10 +76,11 @@ impl From<tray_icon::MouseButton> for MouseButton {
 /// - **Linux**: Unsupported. The event is not emmited even though the icon is shown
 ///   and will still show a context menu on right click.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type")]
 #[non_exhaustive]
 pub enum TrayIconEvent {
   /// A click happened on the tray icon.
+  #[serde(rename_all = "camelCase")]
   Click {
     /// Id of the tray icon which triggered this event.
     id: TrayIconId,
@@ -305,8 +307,26 @@ impl<R: Runtime> TrayIconBuilder<R> {
     self
   }
 
-  /// Whether to show the tray menu on left click or not, default is `true`. **macOS only**.
+  /// Whether to show the tray menu on left click or not, default is `true`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Linux:** Unsupported.
+  #[deprecated(
+    since = "2.2.0",
+    note = "Use `TrayIconBuiler::show_menu_on_left_click` instead."
+  )]
   pub fn menu_on_left_click(mut self, enable: bool) -> Self {
+    self.inner = self.inner.with_menu_on_left_click(enable);
+    self
+  }
+
+  /// Whether to show the tray menu on left click or not, default is `true`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Linux:** Unsupported.
+  pub fn show_menu_on_left_click(mut self, enable: bool) -> Self {
     self.inner = self.inner.with_menu_on_left_click(enable);
     self
   }
@@ -341,10 +361,24 @@ impl<R: Runtime> TrayIconBuilder<R> {
   /// Builds and adds a new [`TrayIcon`] to the system tray.
   pub fn build<M: Manager<R>>(self, manager: &M) -> crate::Result<TrayIcon<R>> {
     let id = self.id().clone();
-    let inner = self.inner.build()?;
+
+    // SAFETY:
+    // the menu within this builder was created on main thread
+    // and will be accessed on the main thread
+    let unsafe_builder = UnsafeSend(self.inner);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let unsafe_tray = manager
+      .app_handle()
+      .run_on_main_thread(move || {
+        // SAFETY: will only be accessed on main thread
+        let _ = tx.send(unsafe_builder.take().build().map(UnsafeSend));
+      })
+      .and_then(|_| rx.recv().map_err(|_| crate::Error::FailedToReceiveMessage))??;
+
     let icon = TrayIcon {
       id,
-      inner,
+      inner: unsafe_tray.take(),
       app_handle: manager.app_handle().clone(),
     };
 
@@ -477,9 +511,9 @@ impl<R: Runtime> TrayIcon<R> {
   ///
   /// - **Linux**: once a menu is set it cannot be removed so `None` has no effect
   pub fn set_menu<M: ContextMenu + 'static>(&self, menu: Option<M>) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| self_
-      .inner
-      .set_menu(menu.map(|m| m.inner_context_owned())))
+    run_item_main_thread!(self, |self_: Self| {
+      self_.inner.set_menu(menu.map(|m| m.inner_context_owned()))
+    })
   }
 
   /// Sets the tooltip for this tray icon.
@@ -527,18 +561,23 @@ impl<R: Runtime> TrayIcon<R> {
   /// Sets the current icon as a [template](https://developer.apple.com/documentation/appkit/nsimage/1520017-template?language=objc). **macOS only**.
   pub fn set_icon_as_template(&self, #[allow(unused)] is_template: bool) -> crate::Result<()> {
     #[cfg(target_os = "macos")]
-    run_item_main_thread!(self, |self_: Self| self_
-      .inner
-      .set_icon_as_template(is_template))?;
+    run_item_main_thread!(self, |self_: Self| {
+      self_.inner.set_icon_as_template(is_template)
+    })?;
     Ok(())
   }
 
-  /// Disable or enable showing the tray menu on left click. **macOS only**.
+  /// Disable or enable showing the tray menu on left click.
+  ///
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Linux**: Unsupported.
   pub fn set_show_menu_on_left_click(&self, #[allow(unused)] enable: bool) -> crate::Result<()> {
-    #[cfg(target_os = "macos")]
-    run_item_main_thread!(self, |self_: Self| self_
-      .inner
-      .set_show_menu_on_left_click(enable))?;
+    #[cfg(any(target_os = "macos", windows))]
+    run_item_main_thread!(self, |self_: Self| {
+      self_.inner.set_show_menu_on_left_click(enable)
+    })?;
     Ok(())
   }
 
@@ -548,17 +587,66 @@ impl<R: Runtime> TrayIcon<R> {
   ///
   /// - **Linux**: Unsupported, always returns `None`.
   pub fn rect(&self) -> crate::Result<Option<crate::Rect>> {
-    run_item_main_thread!(self, |self_: Self| self_.inner.rect().map(|rect| {
-      Rect {
+    run_item_main_thread!(self, |self_: Self| {
+      self_.inner.rect().map(|rect| Rect {
         position: rect.position.into(),
         size: rect.size.into(),
-      }
-    }))
+      })
+    })
   }
 }
 
 impl<R: Runtime> Resource for TrayIcon<R> {
   fn close(self: std::sync::Arc<Self>) {
     self.app_handle.remove_tray_by_id(&self.id);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn tray_event_json_serialization() {
+    // NOTE: if this test is ever changed, you probably need to change `TrayIconEvent` in JS as well
+
+    use super::*;
+    let event = TrayIconEvent::Click {
+      button: MouseButton::Left,
+      button_state: MouseButtonState::Down,
+      id: TrayIconId::new("id"),
+      position: crate::PhysicalPosition::default(),
+      rect: crate::Rect {
+        position: tray_icon::Rect::default().position.into(),
+        size: tray_icon::Rect::default().size.into(),
+      },
+    };
+
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(
+      value,
+      serde_json::json!({
+          "type": "Click",
+          "button": "Left",
+          "buttonState": "Down",
+          "id": "id",
+          "position": {
+              "x": 0.0,
+              "y": 0.0,
+          },
+          "rect": {
+              "size": {
+                  "Physical": {
+                      "width": 0,
+                      "height": 0,
+                  }
+              },
+              "position": {
+                  "Physical": {
+                      "x": 0,
+                      "y": 0,
+                  }
+              },
+          }
+      })
+    );
   }
 }

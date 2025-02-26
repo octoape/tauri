@@ -1,5 +1,100 @@
 # Changelog
 
+## \[2.2.0]
+
+### Enhancements
+
+- [`a2d36b8c3`](https://www.github.com/tauri-apps/tauri/commit/a2d36b8c34a8dcfc6736797ca5cd4665faf75e7e) ([#12181](https://www.github.com/tauri-apps/tauri/pull/12181) by [@bastiankistner](https://www.github.com/tauri-apps/tauri/../../bastiankistner)) Add an option to change the default background throttling policy (currently for WebKit only).
+
+## \[2.1.1]
+
+### Bug Fixes
+
+- [`46935212b`](https://www.github.com/tauri-apps/tauri/commit/46935212b61da44dc82dfeb803fceebf5659f7b7) ([#11658](https://www.github.com/tauri-apps/tauri/pull/11658) by [@Legend-Master](https://www.github.com/tauri-apps/tauri/../../Legend-Master)) Fix `.json5` capability files not recognized even with `config-json5` feature enabled
+
+## \[2.1.0]
+
+### New Features
+
+- [`fabc2f283`](https://www.github.com/tauri-apps/tauri/commit/fabc2f283e38b62c721326e44645d47138418cbc) ([#11485](https://www.github.com/tauri-apps/tauri/pull/11485) by [@39zde](https://www.github.com/tauri-apps/tauri/../../39zde)) Adds a new configuration option `app > security > headers` to define headers that will be added to every http response from tauri to the web view. This doesn't include IPC messages and error responses.
+- [`4d545ab3c`](https://www.github.com/tauri-apps/tauri/commit/4d545ab3ca228c8a21b966b709f84a0da2864479) ([#11486](https://www.github.com/tauri-apps/tauri/pull/11486) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Added `Window::set_background_color` and `WindowBuilder::background_color`.
+- [`cbc095ec5`](https://www.github.com/tauri-apps/tauri/commit/cbc095ec5fe7de29b5c9265576d4e071ec159c1c) ([#11451](https://www.github.com/tauri-apps/tauri/pull/11451) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `app > windows > devtools` config option and when creating the webview from JS, to enable or disable devtools for a specific webview.
+- [`058c0db72`](https://www.github.com/tauri-apps/tauri/commit/058c0db72f43fbe1574d0db654560e693755cd7e) ([#11584](https://www.github.com/tauri-apps/tauri/pull/11584) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `bundle > linux > rpm > compression` config option to control RPM bundle compression type and level.
+- [`f37e97d41`](https://www.github.com/tauri-apps/tauri/commit/f37e97d410c4a219e99f97692da05ca9d8e0ba3a) ([#11477](https://www.github.com/tauri-apps/tauri/pull/11477) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `app > windows > useHttpsScheme` config option to choose whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android
+- [`2a75c64b5`](https://www.github.com/tauri-apps/tauri/commit/2a75c64b5431284e7340e8743d4ea56a62c75466) ([#11469](https://www.github.com/tauri-apps/tauri/pull/11469) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Added `app > windows > windowClassname` config option to specify the name of the window class on Windows.
+
+### Enhancements
+
+- [`c33bbf457`](https://www.github.com/tauri-apps/tauri/commit/c33bbf45740274b6918ea6c647f366fb6008e459) ([#11575](https://www.github.com/tauri-apps/tauri/pull/11575) by [@kornelski](https://www.github.com/tauri-apps/tauri/../../kornelski)) Include the path in ACL I/O errors.
+
+### Bug Fixes
+
+- [`378142914`](https://www.github.com/tauri-apps/tauri/commit/37814291475814b4a24cc77b6fa457ec9ba7a779) ([#11429](https://www.github.com/tauri-apps/tauri/pull/11429) by [@griffi-gh](https://www.github.com/tauri-apps/tauri/../../griffi-gh)) Enhance resource directory resolution to support running on distros like NixOS.
+
+## \[2.0.2]
+
+### New Features
+
+- Add `bundler > windows > wix > version` to manually specify a wix-compatible version.
+
+## \[2.0.1]
+
+### What's Changed
+
+- [`0ab2b3306`](https://www.github.com/tauri-apps/tauri/commit/0ab2b330644b6419f6cee1d5377bfb5cdda2ccf9) ([#11205](https://www.github.com/tauri-apps/tauri/pull/11205) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Downgrade MSRV to 1.77.2 to support Windows 7.
+
+## \[2.0.0]
+
+### What's Changed
+
+- [`382ed482b`](https://www.github.com/tauri-apps/tauri/commit/382ed482bd08157c39e62f9a0aaad8802f1092cb) Bump MSRV to 1.78.
+- [`637285790`](https://www.github.com/tauri-apps/tauri/commit/6372857905ae9c0aedb7f482ddf6cf9f9836c9f2) Promote to v2 stable!
+
+## \[2.0.0-rc.13]
+
+### New Features
+
+- [`a247170e1`](https://www.github.com/tauri-apps/tauri/commit/a247170e1f620a9b012274b11cfe51e90327d6e9) ([#11056](https://www.github.com/tauri-apps/tauri/pull/11056) by [@SpikeHD](https://www.github.com/tauri-apps/tauri/../../SpikeHD)) Expose the ability to enabled browser extensions in WebView2 on Windows.
+- [`f57a729cd`](https://www.github.com/tauri-apps/tauri/commit/f57a729cd8f7e10d8daf0b9d5b85f9c7ad530496) ([#11039](https://www.github.com/tauri-apps/tauri/pull/11039) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `upgradeCode` in `wix` configuration to set an upgrade code for your MSI installer. This is recommended to be set if you plan to change your `productName`.
+
+### Bug Fixes
+
+- [`1efa5e718`](https://www.github.com/tauri-apps/tauri/commit/1efa5e7184009537b688a395596c696173ae0231) ([#11099](https://www.github.com/tauri-apps/tauri/pull/11099) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Rerun build script if the platform-specific configuration file changes.
+
+## \[2.0.0-rc.12]
+
+### New Features
+
+- [`ad294d274`](https://www.github.com/tauri-apps/tauri/commit/ad294d274dd81d2ef91ed73af9163b6e9b8eb964) ([#11032](https://www.github.com/tauri-apps/tauri/pull/11032) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `app > windows > create` option to choose whether to create this window at app startup or not.
+
+## \[2.0.0-rc.11]
+
+### New Features
+
+- [`35bd9dd3d`](https://www.github.com/tauri-apps/tauri/commit/35bd9dd3dc3d8972bbc4aa5f4a6c6fa14354e9bf) ([#10977](https://www.github.com/tauri-apps/tauri/pull/10977) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `mainBinaryName` config option to set the file name for the main binary.
+
+## \[2.0.0-rc.10]
+
+### Bug Fixes
+
+- [`0a47bf043`](https://www.github.com/tauri-apps/tauri/commit/0a47bf04302ca8502d3da21b3bc27818720fe34a) ([#10946](https://www.github.com/tauri-apps/tauri/pull/10946) by [@FabianLars](https://www.github.com/tauri-apps/tauri/../../FabianLars)) Fixed an issue that made the `identifier` in `tauri.conf.json` optional while it was actually required.
+
+## \[2.0.0-rc.9]
+
+### Dependencies
+
+- [`d9c8d3cc8`](https://www.github.com/tauri-apps/tauri/commit/d9c8d3cc8d5ca67cd767ffc7a521f801b41ce201) ([#10902](https://www.github.com/tauri-apps/tauri/pull/10902) by [@Legend-Master](https://www.github.com/tauri-apps/tauri/../../Legend-Master)) Update infer to 0.16, tray icon to 0.17, urlpattern to 0.3, image to 0.25
+
+### Breaking Changes
+
+- [`faa259bac`](https://www.github.com/tauri-apps/tauri/commit/faa259bacf1ace670af763982c6903190faf163a) ([#10907](https://www.github.com/tauri-apps/tauri/pull/10907) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) The `Assets::iter` function now must return a iterator with `Item = (Cow<'_, str>, Cow<'_, [u8]>)` to be more flexible on contexts where the assets are not `'static`.
+
+## \[2.0.0-rc.8]
+
+### Enhancements
+
+- [`f0acf504a`](https://www.github.com/tauri-apps/tauri/commit/f0acf504a2a972c063188a00143d8bf2b887691d) ([#10858](https://www.github.com/tauri-apps/tauri/pull/10858) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Validate duplicate capability identifier.
+
 ## \[2.0.0-rc.7]
 
 ### New Features

@@ -6,15 +6,16 @@
 
 use std::{
   borrow::Cow,
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::{Arc, MutexGuard},
 };
 
 use crate::{
   event::EventTarget,
+  ipc::ScopeObject,
   runtime::dpi::{PhysicalPosition, PhysicalSize},
   window::Monitor,
-  Emitter, Listener, ResourceTable,
+  Emitter, EventName, Listener, ResourceTable, Window,
 };
 #[cfg(desktop)]
 use crate::{
@@ -26,8 +27,10 @@ use crate::{
     UserAttentionType,
   },
 };
-use serde::Serialize;
-use tauri_utils::config::{WebviewUrl, WindowConfig};
+use tauri_utils::{
+  config::{BackgroundThrottlingPolicy, Color, WebviewUrl, WindowConfig},
+  Theme,
+};
 use url::Url;
 
 use crate::{
@@ -45,7 +48,7 @@ use tauri_macros::default_runtime;
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
 
-use super::DownloadEvent;
+use super::{DownloadEvent, ResolvedScope};
 
 /// A builder for [`WebviewWindow`], a window that hosts a single webview.
 pub struct WebviewWindowBuilder<'a, R: Runtime, M: Manager<R>> {
@@ -335,16 +338,22 @@ tauri::Builder::default()
     mut self,
     f: F,
   ) -> Self {
-    self.webview_builder = self
-      .webview_builder
-      .on_page_load(move |webview, payload| f(WebviewWindow { webview }, payload));
+    self.webview_builder = self.webview_builder.on_page_load(move |webview, payload| {
+      f(
+        WebviewWindow {
+          window: webview.window(),
+          webview,
+        },
+        payload,
+      )
+    });
     self
   }
 
   /// Creates a new window.
   pub fn build(self) -> crate::Result<WebviewWindow<R>> {
-    let (_window, webview) = self.window_builder.with_webview(self.webview_builder)?;
-    Ok(WebviewWindow { webview })
+    let (window, webview) = self.window_builder.with_webview(self.webview_builder)?;
+    Ok(WebviewWindow { window, webview })
   }
 }
 
@@ -466,10 +475,11 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   #[must_use]
   #[deprecated(
     since = "1.2.0",
-    note = "The window is automatically focused by default. This function Will be removed in 2.0.0. Use `focused` instead."
+    note = "The window is automatically focused by default. This function Will be removed in 3.0.0. Use `focused` instead."
   )]
   pub fn focus(mut self) -> Self {
     self.window_builder = self.window_builder.focused(true);
+    self.webview_builder = self.webview_builder.focused(true);
     self
   }
 
@@ -477,6 +487,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   #[must_use]
   pub fn focused(mut self, focused: bool) -> Self {
     self.window_builder = self.window_builder.focused(focused);
+    self.webview_builder = self.webview_builder.focused(focused);
     self
   }
 
@@ -502,20 +513,6 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   #[must_use]
   pub fn theme(mut self, theme: Option<crate::Theme>) -> Self {
     self.window_builder = self.window_builder.theme(theme);
-    self
-  }
-
-  /// Whether the window should be transparent. If this is true, writing colors
-  /// with alpha values different than `1.0` will produce a transparent window.
-  #[cfg(any(not(target_os = "macos"), feature = "macos-private-api"))]
-  #[cfg_attr(
-    docsrs,
-    doc(cfg(any(not(target_os = "macos"), feature = "macos-private-api")))
-  )]
-  #[must_use]
-  pub fn transparent(mut self, transparent: bool) -> Self {
-    self.window_builder = self.window_builder.transparent(transparent);
-    self.webview_builder = self.webview_builder.transparent(transparent);
     self
   }
 
@@ -573,6 +570,13 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
     self
   }
 
+  /// Sets custom name for Windows' window class.  **Windows only**.
+  #[must_use]
+  pub fn window_classname<S: Into<String>>(mut self, classname: S) -> Self {
+    self.window_builder = self.window_builder.window_classname(classname);
+    self
+  }
+
   /// Sets whether or not the window has shadow.
   ///
   /// ## Platform-specific
@@ -600,7 +604,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   /// - **Linux**: This makes the new window transient for parent, see <https://docs.gtk.org/gtk3/method.Window.set_transient_for.html>
   /// - **macOS**: This adds the window as a child of parent, see <https://developer.apple.com/documentation/appkit/nswindow/1419152-addchildwindow?language=objc>
   pub fn parent(mut self, parent: &WebviewWindow<R>) -> crate::Result<Self> {
-    self.window_builder = self.window_builder.parent(&parent.webview.window())?;
+    self.window_builder = self.window_builder.parent(&parent.window)?;
     Ok(self)
   }
 
@@ -614,7 +618,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   /// For more information, see <https://docs.microsoft.com/en-us/windows/win32/winmsg/window-features#owned-windows>
   #[cfg(windows)]
   pub fn owner(mut self, owner: &WebviewWindow<R>) -> crate::Result<Self> {
-    self.window_builder = self.window_builder.owner(&owner.webview.window())?;
+    self.window_builder = self.window_builder.owner(&owner.window)?;
     Ok(self)
   }
 
@@ -666,9 +670,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
     target_os = "openbsd"
   ))]
   pub fn transient_for(mut self, parent: &WebviewWindow<R>) -> crate::Result<Self> {
-    self.window_builder = self
-      .window_builder
-      .transient_for(&parent.webview.window())?;
+    self.window_builder = self.window_builder.transient_for(&parent.window)?;
     Ok(self)
   }
 
@@ -740,7 +742,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
 }
 
 /// Webview attributes.
-impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
+impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// Sets whether clicking an inactive window also clicks through to the webview.
   #[must_use]
   pub fn accept_first_mouse(mut self, accept: bool) -> Self {
@@ -859,6 +861,23 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
     self
   }
 
+  /// Whether the window should be transparent. If this is true, writing colors
+  /// with alpha values different than `1.0` will produce a transparent window.
+  #[cfg(any(not(target_os = "macos"), feature = "macos-private-api"))]
+  #[cfg_attr(
+    docsrs,
+    doc(cfg(any(not(target_os = "macos"), feature = "macos-private-api")))
+  )]
+  #[must_use]
+  pub fn transparent(mut self, transparent: bool) -> Self {
+    #[cfg(desktop)]
+    {
+      self.window_builder = self.window_builder.transparent(transparent);
+    }
+    self.webview_builder = self.webview_builder.transparent(transparent);
+    self
+  }
+
   /// Whether page zooming by hotkeys is enabled
   ///
   /// ## Platform-specific:
@@ -873,12 +892,117 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
     self.webview_builder = self.webview_builder.zoom_hotkeys_enabled(enabled);
     self
   }
+
+  /// Whether browser extensions can be installed for the webview process
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Windows**: Enables the WebView2 environment's [`AreBrowserExtensionsEnabled`](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2environmentoptions?view=webview2-winrt-1.0.2739.15#arebrowserextensionsenabled)
+  /// - **MacOS / Linux / iOS / Android** - Unsupported.
+  #[must_use]
+  pub fn browser_extensions_enabled(mut self, enabled: bool) -> Self {
+    self.webview_builder = self.webview_builder.browser_extensions_enabled(enabled);
+    self
+  }
+
+  /// Set the path from which to load extensions from. Extensions stored in this path should be unpacked Chrome extensions on Windows, and compiled `.so` extensions on Linux.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Windows**: Browser extensions must first be enabled. See [`browser_extensions_enabled`](Self::browser_extensions_enabled)
+  /// - **MacOS / iOS / Android** - Unsupported.
+  #[must_use]
+  pub fn extensions_path(mut self, path: impl AsRef<Path>) -> Self {
+    self.webview_builder = self.webview_builder.extensions_path(path);
+    self
+  }
+
+  /// Initialize the WebView with a custom data store identifier.
+  /// Can be used as a replacement for data_directory not being available in WKWebView.
+  ///
+  /// - **macOS / iOS**: Available on macOS >= 14 and iOS >= 17
+  /// - **Windows / Linux / Android**: Unsupported.
+  #[must_use]
+  pub fn data_store_identifier(mut self, data_store_identifier: [u8; 16]) -> Self {
+    self.webview_builder = self
+      .webview_builder
+      .data_store_identifier(data_store_identifier);
+    self
+  }
+
+  /// Sets whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android. Defaults to `false`.
+  ///
+  /// ## Note
+  ///
+  /// Using a `https` scheme will NOT allow mixed content when trying to fetch `http` endpoints and therefore will not match the behavior of the `<scheme>://localhost` protocols used on macOS and Linux.
+  ///
+  /// ## Warning
+  ///
+  /// Changing this value between releases will change the IndexedDB, cookies and localstorage location and your app will not be able to access the old data.
+  #[must_use]
+  pub fn use_https_scheme(mut self, enabled: bool) -> Self {
+    self.webview_builder = self.webview_builder.use_https_scheme(enabled);
+    self
+  }
+
+  /// Whether web inspector, which is usually called browser devtools, is enabled or not. Enabled by default.
+  ///
+  /// This API works in **debug** builds, but requires `devtools` feature flag to enable it in **release** builds.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - macOS: This will call private functions on **macOS**.
+  /// - Android: Open `chrome://inspect/#devices` in Chrome to get the devtools window. Wry's `WebView` devtools API isn't supported on Android.
+  /// - iOS: Open Safari > Develop > [Your Device Name] > [Your WebView] to get the devtools window.
+  #[must_use]
+  pub fn devtools(mut self, enabled: bool) -> Self {
+    self.webview_builder = self.webview_builder.devtools(enabled);
+    self
+  }
+
+  /// Set the window and webview background color.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **Android / iOS:** Unsupported for the window layer.
+  /// - **macOS / iOS**: Not implemented for the webview layer.
+  /// - **Windows**:
+  ///   - alpha channel is ignored for the window layer.
+  ///   - On Windows 7, alpha channel is ignored for the webview layer.
+  ///   - On Windows 8 and newer, if alpha channel is not `0`, it will be ignored.
+  #[must_use]
+  pub fn background_color(mut self, color: Color) -> Self {
+    self.window_builder = self.window_builder.background_color(color);
+    self.webview_builder = self.webview_builder.background_color(color);
+    self
+  }
+
+  /// Change the default background throttling behaviour.
+  ///
+  /// By default, browsers use a suspend policy that will throttle timers and even unload
+  /// the whole tab (view) to free resources after roughly 5 minutes when a view became
+  /// minimized or hidden. This will pause all tasks until the documents visibility state
+  /// changes back from hidden to visible by bringing the view back to the foreground.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **Linux / Windows / Android**: Unsupported. Workarounds like a pending WebLock transaction might suffice.
+  /// - **iOS**: Supported since version 17.0+.
+  /// - **macOS**: Supported since version 14.0+.
+  ///
+  /// see https://github.com/tauri-apps/tauri/issues/5250#issuecomment-2569380578
+  #[must_use]
+  pub fn background_throttling(mut self, policy: BackgroundThrottlingPolicy) -> Self {
+    self.webview_builder = self.webview_builder.background_throttling(policy);
+    self
+  }
 }
 
 /// A type that wraps a [`Window`] together with a [`Webview`].
 #[default_runtime(crate::Wry, wry)]
 #[derive(Debug)]
 pub struct WebviewWindow<R: Runtime> {
+  pub(crate) window: Window<R>,
   pub(crate) webview: Webview<R>,
 }
 
@@ -891,6 +1015,7 @@ impl<R: Runtime> AsRef<Webview<R>> for WebviewWindow<R> {
 impl<R: Runtime> Clone for WebviewWindow<R> {
   fn clone(&self) -> Self {
     Self {
+      window: self.window.clone(),
       webview: self.webview.clone(),
     }
   }
@@ -909,7 +1034,7 @@ impl<R: Runtime> raw_window_handle::HasWindowHandle for WebviewWindow<R> {
     &self,
   ) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
     Ok(unsafe {
-      raw_window_handle::WindowHandle::borrow_raw(self.webview.window().window_handle()?.as_raw())
+      raw_window_handle::WindowHandle::borrow_raw(self.window.window_handle()?.as_raw())
     })
   }
 }
@@ -926,11 +1051,15 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WebviewWindow<R> {
   /// Grabs the [`Window`] from the [`CommandItem`]. This will never fail.
   fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
     let webview = command.message.webview();
-    if webview.window().is_webview_window() {
-      Ok(Self { webview })
-    } else {
-      Err(InvokeError::from("current webview is not a WebviewWindow"))
+    let window = webview.window();
+    if window.is_webview_window() {
+      return Ok(Self {
+        window: window.clone(),
+        webview,
+      });
     }
+
+    Err(InvokeError::from("current webview is not a WebviewWindow"))
   }
 }
 
@@ -959,7 +1088,53 @@ impl<R: Runtime> WebviewWindow<R> {
 
   /// Registers a window event listener.
   pub fn on_window_event<F: Fn(&WindowEvent) + Send + 'static>(&self, f: F) {
-    self.webview.window().on_window_event(f);
+    self.window.on_window_event(f);
+  }
+
+  /// Resolves the given command scope for this webview on the currently loaded URL.
+  ///
+  /// If the command is not allowed, returns None.
+  ///
+  /// If the scope cannot be deserialized to the given type, an error is returned.
+  ///
+  /// In a command context this can be directly resolved from the command arguments via [crate::ipc::CommandScope]:
+  ///
+  /// ```
+  /// use tauri::ipc::CommandScope;
+  ///
+  /// #[derive(Debug, serde::Deserialize)]
+  /// struct ScopeType {
+  ///   some_value: String,
+  /// }
+  /// #[tauri::command]
+  /// fn my_command(scope: CommandScope<ScopeType>) {
+  ///   // check scope
+  /// }
+  /// ```
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use tauri::Manager;
+  ///
+  /// #[derive(Debug, serde::Deserialize)]
+  /// struct ScopeType {
+  ///   some_value: String,
+  /// }
+  ///
+  /// tauri::Builder::default()
+  ///   .setup(|app| {
+  ///     let webview = app.get_webview_window("main").unwrap();
+  ///     let scope = webview.resolve_command_scope::<ScopeType>("my-plugin", "read");
+  ///     Ok(())
+  ///   });
+  /// ```
+  pub fn resolve_command_scope<T: ScopeObject>(
+    &self,
+    plugin: &str,
+    command: &str,
+  ) -> crate::Result<Option<ResolvedScope<T>>> {
+    self.webview.resolve_command_scope(plugin, command)
   }
 }
 
@@ -1007,12 +1182,12 @@ impl<R: Runtime> WebviewWindow<R> {
     &self,
     f: F,
   ) {
-    self.webview.window().on_menu_event(f)
+    self.window.on_menu_event(f)
   }
 
-  /// Returns this window menu .
+  /// Returns this window menu.
   pub fn menu(&self) -> Option<Menu<R>> {
-    self.webview.window().menu()
+    self.window.menu()
   }
 
   /// Sets the window menu and returns the previous one.
@@ -1023,7 +1198,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   window, if you need to set it, use [`AppHandle::set_menu`] instead.
   #[cfg_attr(target_os = "macos", allow(unused_variables))]
   pub fn set_menu(&self, menu: Menu<R>) -> crate::Result<Option<Menu<R>>> {
-    self.webview.window().set_menu(menu)
+    self.window.set_menu(menu)
   }
 
   /// Removes the window menu and returns it.
@@ -1033,27 +1208,27 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **macOS:** Unsupported. The menu on macOS is app-wide and not specific to one
   ///   window, if you need to remove it, use [`AppHandle::remove_menu`] instead.
   pub fn remove_menu(&self) -> crate::Result<Option<Menu<R>>> {
-    self.webview.window().remove_menu()
+    self.window.remove_menu()
   }
 
   /// Hides the window menu.
   pub fn hide_menu(&self) -> crate::Result<()> {
-    self.webview.window().hide_menu()
+    self.window.hide_menu()
   }
 
   /// Shows the window menu.
   pub fn show_menu(&self) -> crate::Result<()> {
-    self.webview.window().show_menu()
+    self.window.show_menu()
   }
 
   /// Shows the window menu.
   pub fn is_menu_visible(&self) -> crate::Result<bool> {
-    self.webview.window().is_menu_visible()
+    self.window.is_menu_visible()
   }
 
   /// Shows the specified menu as a context menu at the cursor position.
   pub fn popup_menu<M: ContextMenu>(&self, menu: &M) -> crate::Result<()> {
-    self.webview.window().popup_menu(menu)
+    self.window.popup_menu(menu)
   }
 
   /// Shows the specified menu as a context menu at the specified position.
@@ -1064,7 +1239,7 @@ impl<R: Runtime> WebviewWindow<R> {
     menu: &M,
     position: P,
   ) -> crate::Result<()> {
-    menu.popup_at(self.webview.window(), position)
+    self.window.popup_menu_at(menu, position)
   }
 }
 
@@ -1072,61 +1247,66 @@ impl<R: Runtime> WebviewWindow<R> {
 impl<R: Runtime> WebviewWindow<R> {
   /// Returns the scale factor that can be used to map logical pixels to physical pixels, and vice versa.
   pub fn scale_factor(&self) -> crate::Result<f64> {
-    self.webview.window().scale_factor()
+    self.window.scale_factor()
   }
 
   /// Returns the position of the top-left hand corner of the window's client area relative to the top-left hand corner of the desktop.
   pub fn inner_position(&self) -> crate::Result<PhysicalPosition<i32>> {
-    self.webview.window().inner_position()
+    self.window.inner_position()
   }
 
   /// Returns the position of the top-left hand corner of the window relative to the top-left hand corner of the desktop.
   pub fn outer_position(&self) -> crate::Result<PhysicalPosition<i32>> {
-    self.webview.window().outer_position()
+    self.window.outer_position()
   }
 
   /// Returns the physical size of the window's client area.
   ///
   /// The client area is the content of the window, excluding the title bar and borders.
   pub fn inner_size(&self) -> crate::Result<PhysicalSize<u32>> {
-    self.webview.window().inner_size()
+    self.window.inner_size()
   }
 
   /// Returns the physical size of the entire window.
   ///
   /// These dimensions include the title bar and borders. If you don't want that (and you usually don't), use inner_size instead.
   pub fn outer_size(&self) -> crate::Result<PhysicalSize<u32>> {
-    self.webview.window().outer_size()
+    self.window.outer_size()
   }
 
   /// Gets the window's current fullscreen state.
   pub fn is_fullscreen(&self) -> crate::Result<bool> {
-    self.webview.window().is_fullscreen()
+    self.window.is_fullscreen()
   }
 
   /// Gets the window's current minimized state.
   pub fn is_minimized(&self) -> crate::Result<bool> {
-    self.webview.window().is_minimized()
+    self.window.is_minimized()
   }
 
   /// Gets the window's current maximized state.
   pub fn is_maximized(&self) -> crate::Result<bool> {
-    self.webview.window().is_maximized()
+    self.window.is_maximized()
   }
 
   /// Gets the window's current focus state.
   pub fn is_focused(&self) -> crate::Result<bool> {
-    self.webview.window().is_focused()
+    self.window.is_focused()
   }
 
   /// Gets the window's current decoration state.
   pub fn is_decorated(&self) -> crate::Result<bool> {
-    self.webview.window().is_decorated()
+    self.window.is_decorated()
   }
 
   /// Gets the window's current resizable state.
   pub fn is_resizable(&self) -> crate::Result<bool> {
-    self.webview.window().is_resizable()
+    self.window.is_resizable()
+  }
+
+  /// Whether the window is enabled or disabled.
+  pub fn is_enabled(&self) -> crate::Result<bool> {
+    self.webview.window().is_enabled()
   }
 
   /// Gets the window's native maximize button state
@@ -1135,7 +1315,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   pub fn is_maximizable(&self) -> crate::Result<bool> {
-    self.webview.window().is_maximizable()
+    self.window.is_maximizable()
   }
 
   /// Gets the window's native minimize button state
@@ -1144,7 +1324,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   pub fn is_minimizable(&self) -> crate::Result<bool> {
-    self.webview.window().is_minimizable()
+    self.window.is_minimizable()
   }
 
   /// Gets the window's native close button state
@@ -1153,59 +1333,59 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   pub fn is_closable(&self) -> crate::Result<bool> {
-    self.webview.window().is_closable()
+    self.window.is_closable()
   }
 
   /// Gets the window's current visibility state.
   pub fn is_visible(&self) -> crate::Result<bool> {
-    self.webview.window().is_visible()
+    self.window.is_visible()
   }
 
   /// Gets the window's current title.
   pub fn title(&self) -> crate::Result<String> {
-    self.webview.window().title()
+    self.window.title()
   }
 
   /// Returns the monitor on which the window currently resides.
   ///
   /// Returns None if current monitor can't be detected.
   pub fn current_monitor(&self) -> crate::Result<Option<Monitor>> {
-    self.webview.window().current_monitor()
+    self.window.current_monitor()
   }
 
   /// Returns the primary monitor of the system.
   ///
   /// Returns None if it can't identify any monitor as a primary one.
   pub fn primary_monitor(&self) -> crate::Result<Option<Monitor>> {
-    self.webview.window().primary_monitor()
+    self.window.primary_monitor()
   }
 
   /// Returns the monitor that contains the given point.
   pub fn monitor_from_point(&self, x: f64, y: f64) -> crate::Result<Option<Monitor>> {
-    self.webview.window().monitor_from_point(x, y)
+    self.window.monitor_from_point(x, y)
   }
 
   /// Returns the list of all the monitors available on the system.
   pub fn available_monitors(&self) -> crate::Result<Vec<Monitor>> {
-    self.webview.window().available_monitors()
+    self.window.available_monitors()
   }
 
   /// Returns the native handle that is used by this window.
   #[cfg(target_os = "macos")]
   pub fn ns_window(&self) -> crate::Result<*mut std::ffi::c_void> {
-    self.webview.window().ns_window()
+    self.window.ns_window()
   }
 
   /// Returns the pointer to the content view of this window.
   #[cfg(target_os = "macos")]
   pub fn ns_view(&self) -> crate::Result<*mut std::ffi::c_void> {
-    self.webview.window().ns_view()
+    self.window.ns_view()
   }
 
   /// Returns the native handle that is used by this window.
   #[cfg(windows)]
   pub fn hwnd(&self) -> crate::Result<HWND> {
-    self.webview.window().hwnd()
+    self.window.hwnd()
   }
 
   /// Returns the `ApplicationWindow` from gtk crate that is used by this window.
@@ -1219,7 +1399,7 @@ impl<R: Runtime> WebviewWindow<R> {
     target_os = "openbsd"
   ))]
   pub fn gtk_window(&self) -> crate::Result<gtk::ApplicationWindow> {
-    self.webview.window().gtk_window()
+    self.window.gtk_window()
   }
 
   /// Returns the vertical [`gtk::Box`] that is added by default as the sole child of this window.
@@ -1233,7 +1413,7 @@ impl<R: Runtime> WebviewWindow<R> {
     target_os = "openbsd"
   ))]
   pub fn default_vbox(&self) -> crate::Result<gtk::Box> {
-    self.webview.window().default_vbox()
+    self.window.default_vbox()
   }
 
   /// Returns the current window theme.
@@ -1242,7 +1422,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **macOS**: Only supported on macOS 10.14+.
   pub fn theme(&self) -> crate::Result<crate::Theme> {
-    self.webview.window().theme()
+    self.window.theme()
   }
 }
 
@@ -1267,7 +1447,7 @@ impl<R: Runtime> WebviewWindow<R> {
 impl<R: Runtime> WebviewWindow<R> {
   /// Centers the window.
   pub fn center(&self) -> crate::Result<()> {
-    self.webview.window().center()
+    self.window.center()
   }
 
   /// Requests user attention to the window, this has no effect if the application
@@ -1285,13 +1465,18 @@ impl<R: Runtime> WebviewWindow<R> {
     &self,
     request_type: Option<UserAttentionType>,
   ) -> crate::Result<()> {
-    self.webview.window().request_user_attention(request_type)
+    self.window.request_user_attention(request_type)
   }
 
   /// Determines if this window should be resizable.
   /// When resizable is set to false, native window's maximize button is automatically disabled.
   pub fn set_resizable(&self, resizable: bool) -> crate::Result<()> {
-    self.webview.window().set_resizable(resizable)
+    self.window.set_resizable(resizable)
+  }
+
+  /// Enable or disable the window.
+  pub fn set_enabled(&self, enabled: bool) -> crate::Result<()> {
+    self.webview.window().set_enabled(enabled)
   }
 
   /// Determines if this window's native maximize button should be enabled.
@@ -1302,7 +1487,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
-    self.webview.window().set_maximizable(maximizable)
+    self.window.set_maximizable(maximizable)
   }
 
   /// Determines if this window's native minimize button should be enabled.
@@ -1311,7 +1496,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
-    self.webview.window().set_minimizable(minimizable)
+    self.window.set_minimizable(minimizable)
   }
 
   /// Determines if this window's native close button should be enabled.
@@ -1322,59 +1507,59 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   Depending on the system, this function may not have any effect when called on a window that is already visible"
   /// - **iOS / Android:** Unsupported.
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
-    self.webview.window().set_closable(closable)
+    self.window.set_closable(closable)
   }
 
   /// Set this window's title.
   pub fn set_title(&self, title: &str) -> crate::Result<()> {
-    self.webview.window().set_title(title)
+    self.window.set_title(title)
   }
 
   /// Maximizes this window.
   pub fn maximize(&self) -> crate::Result<()> {
-    self.webview.window().maximize()
+    self.window.maximize()
   }
 
   /// Un-maximizes this window.
   pub fn unmaximize(&self) -> crate::Result<()> {
-    self.webview.window().unmaximize()
+    self.window.unmaximize()
   }
 
   /// Minimizes this window.
   pub fn minimize(&self) -> crate::Result<()> {
-    self.webview.window().minimize()
+    self.window.minimize()
   }
 
   /// Un-minimizes this window.
   pub fn unminimize(&self) -> crate::Result<()> {
-    self.webview.window().unminimize()
+    self.window.unminimize()
   }
 
   /// Show this window.
   pub fn show(&self) -> crate::Result<()> {
-    self.webview.window().show()
+    self.window.show()
   }
 
   /// Hide this window.
   pub fn hide(&self) -> crate::Result<()> {
-    self.webview.window().hide()
+    self.window.hide()
   }
 
   /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
   pub fn close(&self) -> crate::Result<()> {
-    self.webview.window().close()
+    self.window.close()
   }
 
   /// Destroys this window. Similar to [`Self::close`] but does not emit any events and force close the window instead.
   pub fn destroy(&self) -> crate::Result<()> {
-    self.webview.window().destroy()
+    self.window.destroy()
   }
 
   /// Determines if this window should be [decorated].
   ///
   /// [decorated]: https://en.wikipedia.org/wiki/Window_(computing)#Window_decoration
   pub fn set_decorations(&self, decorations: bool) -> crate::Result<()> {
-    self.webview.window().set_decorations(decorations)
+    self.window.set_decorations(decorations)
   }
 
   /// Determines if this window should have shadow.
@@ -1387,7 +1572,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///     and on Windows 11, it will have a rounded corners.
   /// - **Linux:** Unsupported.
   pub fn set_shadow(&self, enable: bool) -> crate::Result<()> {
-    self.webview.window().set_shadow(enable)
+    self.window.set_shadow(enable)
   }
 
   /// Sets window effects, pass [`None`] to clear any effects applied if possible.
@@ -1422,17 +1607,17 @@ impl<R: Runtime> WebviewWindow<R> {
     &self,
     effects: E,
   ) -> crate::Result<()> {
-    self.webview.window().set_effects(effects)
+    self.window.set_effects(effects)
   }
 
   /// Determines if this window should always be below other windows.
   pub fn set_always_on_bottom(&self, always_on_bottom: bool) -> crate::Result<()> {
-    self.webview.window().set_always_on_bottom(always_on_bottom)
+    self.window.set_always_on_bottom(always_on_bottom)
   }
 
   /// Determines if this window should always be on top of other windows.
   pub fn set_always_on_top(&self, always_on_top: bool) -> crate::Result<()> {
-    self.webview.window().set_always_on_top(always_on_top)
+    self.window.set_always_on_top(always_on_top)
   }
 
   /// Sets whether the window should be visible on all workspaces or virtual desktops.
@@ -1441,29 +1626,28 @@ impl<R: Runtime> WebviewWindow<R> {
     visible_on_all_workspaces: bool,
   ) -> crate::Result<()> {
     self
-      .webview
-      .window()
+      .window
       .set_visible_on_all_workspaces(visible_on_all_workspaces)
   }
 
   /// Prevents the window contents from being captured by other apps.
   pub fn set_content_protected(&self, protected: bool) -> crate::Result<()> {
-    self.webview.window().set_content_protected(protected)
+    self.window.set_content_protected(protected)
   }
 
   /// Resizes this window.
   pub fn set_size<S: Into<Size>>(&self, size: S) -> crate::Result<()> {
-    self.webview.window().set_size(size.into())
+    self.window.set_size(size.into())
   }
 
   /// Sets this window's minimum inner size.
   pub fn set_min_size<S: Into<Size>>(&self, size: Option<S>) -> crate::Result<()> {
-    self.webview.window().set_min_size(size.map(|s| s.into()))
+    self.window.set_min_size(size.map(|s| s.into()))
   }
 
   /// Sets this window's maximum inner size.
   pub fn set_max_size<S: Into<Size>>(&self, size: Option<S>) -> crate::Result<()> {
-    self.webview.window().set_max_size(size.map(|s| s.into()))
+    self.window.set_max_size(size.map(|s| s.into()))
   }
 
   /// Sets this window's minimum inner width.
@@ -1471,27 +1655,42 @@ impl<R: Runtime> WebviewWindow<R> {
     &self,
     constriants: tauri_runtime::window::WindowSizeConstraints,
   ) -> crate::Result<()> {
-    self.webview.window().set_size_constraints(constriants)
+    self.window.set_size_constraints(constriants)
   }
 
   /// Sets this window's position.
   pub fn set_position<Pos: Into<Position>>(&self, position: Pos) -> crate::Result<()> {
-    self.webview.window().set_position(position)
+    self.window.set_position(position)
   }
 
   /// Determines if this window should be fullscreen.
   pub fn set_fullscreen(&self, fullscreen: bool) -> crate::Result<()> {
-    self.webview.window().set_fullscreen(fullscreen)
+    self.window.set_fullscreen(fullscreen)
   }
 
   /// Bring the window to front and focus.
   pub fn set_focus(&self) -> crate::Result<()> {
-    self.webview.window().set_focus()
+    self.window.set_focus()
   }
 
   /// Sets this window' icon.
   pub fn set_icon(&self, icon: Image<'_>) -> crate::Result<()> {
-    self.webview.window().set_icon(icon)
+    self.window.set_icon(icon)
+  }
+
+  /// Sets the window background color.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **iOS / Android:** Unsupported.
+  /// - **macOS**: Not implemented for the webview layer..
+  /// - **Windows**:
+  ///   - alpha channel is ignored for the window layer.
+  ///   - On Windows 7, transparency is not supported and the alpha value will be ignored for the webview layer..
+  ///   - On Windows 8 and newer: translucent colors are not supported so any alpha value other than `0` will be replaced by `255` for the webview layer.
+  pub fn set_background_color(&self, color: Option<Color>) -> crate::Result<()> {
+    self.window.set_background_color(color)?;
+    self.webview.set_background_color(color)
   }
 
   /// Whether to hide the window icon from the taskbar or not.
@@ -1500,7 +1699,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **macOS:** Unsupported.
   pub fn set_skip_taskbar(&self, skip: bool) -> crate::Result<()> {
-    self.webview.window().set_skip_taskbar(skip)
+    self.window.set_skip_taskbar(skip)
   }
 
   /// Grabs the cursor, preventing it from leaving the window.
@@ -1513,7 +1712,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **Linux:** Unsupported.
   /// - **macOS:** This locks the cursor in a fixed location, which looks visually awkward.
   pub fn set_cursor_grab(&self, grab: bool) -> crate::Result<()> {
-    self.webview.window().set_cursor_grab(grab)
+    self.window.set_cursor_grab(grab)
   }
 
   /// Modifies the cursor's visibility.
@@ -1526,27 +1725,53 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **macOS:** The cursor is hidden as long as the window has input focus, even if the cursor is
   ///   outside of the window.
   pub fn set_cursor_visible(&self, visible: bool) -> crate::Result<()> {
-    self.webview.window().set_cursor_visible(visible)
+    self.window.set_cursor_visible(visible)
   }
 
   /// Modifies the cursor icon of the window.
   pub fn set_cursor_icon(&self, icon: CursorIcon) -> crate::Result<()> {
-    self.webview.window().set_cursor_icon(icon)
+    self.window.set_cursor_icon(icon)
   }
 
   /// Changes the position of the cursor in window coordinates.
   pub fn set_cursor_position<Pos: Into<Position>>(&self, position: Pos) -> crate::Result<()> {
-    self.webview.window().set_cursor_position(position)
+    self.window.set_cursor_position(position)
   }
 
   /// Ignores the window cursor events.
   pub fn set_ignore_cursor_events(&self, ignore: bool) -> crate::Result<()> {
-    self.webview.window().set_ignore_cursor_events(ignore)
+    self.window.set_ignore_cursor_events(ignore)
   }
 
   /// Starts dragging the window.
   pub fn start_dragging(&self) -> crate::Result<()> {
-    self.webview.window().start_dragging()
+    self.window.start_dragging()
+  }
+
+  /// Sets the overlay icon on the taskbar **Windows only**. Using `None` will remove the icon
+  ///
+  /// The overlay icon can be unique for each window.
+  #[cfg(target_os = "windows")]
+  #[cfg_attr(docsrs, doc(cfg(target_os = "windows")))]
+  pub fn set_overlay_icon(&self, icon: Option<Image<'_>>) -> crate::Result<()> {
+    self.window.set_overlay_icon(icon)
+  }
+
+  /// Sets the taskbar badge count. Using `0` or `None` will remove the badge
+  ///
+  /// ## Platform-specific
+  /// - **Windows:** Unsupported, use [`WebviewWindow::set_overlay_icon`] instead.
+  /// - **iOS:** iOS expects i32, the value will be clamped to i32::MIN, i32::MAX.
+  /// - **Android:** Unsupported.
+  pub fn set_badge_count(&self, count: Option<i64>) -> crate::Result<()> {
+    self.window.set_badge_count(count)
+  }
+
+  /// Sets the taskbar badge label **macOS only**. Using `None` will remove the badge
+  #[cfg(target_os = "macos")]
+  #[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
+  pub fn set_badge_label(&self, label: Option<String>) -> crate::Result<()> {
+    self.window.set_badge_label(label)
   }
 
   /// Sets the taskbar progress state.
@@ -1560,12 +1785,17 @@ impl<R: Runtime> WebviewWindow<R> {
     &self,
     progress_state: crate::window::ProgressBarState,
   ) -> crate::Result<()> {
-    self.webview.window().set_progress_bar(progress_state)
+    self.window.set_progress_bar(progress_state)
   }
 
   /// Sets the title bar style. **macOS only**.
   pub fn set_title_bar_style(&self, style: tauri_utils::TitleBarStyle) -> crate::Result<()> {
-    self.webview.window().set_title_bar_style(style)
+    self.window.set_title_bar_style(style)
+  }
+
+  /// Set the window theme.
+  pub fn set_theme(&self, theme: Option<Theme>) -> crate::Result<()> {
+    self.window.set_theme(theme)
   }
 }
 
@@ -1586,12 +1816,12 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// The closure is executed on the main thread.
   ///
+  /// Note that `webview2-com`, `webkit2gtk`, `objc2_web_kit` and similar crates may be updated in minor releases of Tauri.
+  /// Therefore it's recommended to pin Tauri to at least a minor version when you're using `with_webview`.
+  ///
   /// # Examples
   ///
   /// ```rust,no_run
-  /// #[cfg(target_os = "macos")]
-  /// #[macro_use]
-  /// extern crate objc;
   /// use tauri::Manager;
   ///
   /// fn main() {
@@ -1615,10 +1845,14 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   ///         #[cfg(target_os = "macos")]
   ///         unsafe {
-  ///           let () = msg_send![webview.inner(), setPageZoom: 4.];
-  ///           let () = msg_send![webview.controller(), removeAllUserScripts];
-  ///           let bg_color: cocoa::base::id = msg_send![class!(NSColor), colorWithDeviceRed:0.5 green:0.2 blue:0.4 alpha:1.];
-  ///           let () = msg_send![webview.ns_window(), setBackgroundColor: bg_color];
+  ///           let view: &objc2_web_kit::WKWebView = &*webview.inner().cast();
+  ///           let controller: &objc2_web_kit::WKUserContentController = &*webview.controller().cast();
+  ///           let window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+  ///
+  ///           view.setPageZoom(4.);
+  ///           controller.removeAllUserScripts();
+  ///           let bg_color = objc2_app_kit::NSColor::colorWithDeviceRed_green_blue_alpha(0.5, 0.2, 0.4, 1.);
+  ///           window.setBackgroundColor(Some(&bg_color));
   ///         }
   ///
   ///         #[cfg(target_os = "android")]
@@ -1633,6 +1867,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   });
   /// }
   /// ```
+  #[allow(clippy::needless_doctest_main)] // To avoid a large diff
   #[cfg(feature = "wry")]
   #[cfg_attr(docsrs, doc(feature = "wry"))]
   pub fn with_webview<F: FnOnce(crate::webview::PlatformWebview) + Send + 'static>(
@@ -1648,7 +1883,7 @@ impl<R: Runtime> WebviewWindow<R> {
   }
 
   /// Navigates the webview to the defined url.
-  pub fn navigate(&mut self, url: Url) -> crate::Result<()> {
+  pub fn navigate(&self, url: Url) -> crate::Result<()> {
     self.webview.navigate(url)
   }
 
@@ -1765,6 +2000,11 @@ impl<R: Runtime> WebviewWindow<R> {
   pub fn set_zoom(&self, scale_factor: f64) -> crate::Result<()> {
     self.webview.set_zoom(scale_factor)
   }
+
+  /// Clear all browsing data for this webview window.
+  pub fn clear_all_browsing_data(&self) -> crate::Result<()> {
+    self.webview.clear_all_browsing_data()
+  }
 }
 
 impl<R: Runtime> Listener<R> for WebviewWindow<R> {
@@ -1789,8 +2029,9 @@ impl<R: Runtime> Listener<R> for WebviewWindow<R> {
   where
     F: Fn(Event) + Send + 'static,
   {
+    let event = EventName::new(event.into()).unwrap();
     self.manager().listen(
-      event.into(),
+      event,
       EventTarget::WebviewWindow {
         label: self.label().to_string(),
       },
@@ -1805,8 +2046,9 @@ impl<R: Runtime> Listener<R> for WebviewWindow<R> {
   where
     F: FnOnce(Event) + Send + 'static,
   {
+    let event = EventName::new(event.into()).unwrap();
     self.manager().once(
-      event.into(),
+      event,
       EventTarget::WebviewWindow {
         label: self.label().to_string(),
       },
@@ -1843,79 +2085,7 @@ impl<R: Runtime> Listener<R> for WebviewWindow<R> {
   }
 }
 
-impl<R: Runtime> Emitter<R> for WebviewWindow<R> {
-  /// Emits an event to all [targets](EventTarget).
-  ///
-  /// # Examples
-  /// ```
-  /// use tauri::Emitter;
-  ///
-  /// #[tauri::command]
-  /// fn synchronize(window: tauri::WebviewWindow) {
-  ///   // emits the synchronized event to all webviews
-  ///   window.emit("synchronized", ());
-  /// }
-  ///   ```
-  fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) -> crate::Result<()> {
-    self.manager().emit(event, payload)
-  }
-
-  /// Emits an event to all [targets](EventTarget) matching the given target.
-  ///
-  /// # Examples
-  /// ```
-  /// use tauri::{Emitter, EventTarget};
-  ///
-  /// #[tauri::command]
-  /// fn download(window: tauri::WebviewWindow) {
-  ///   for i in 1..100 {
-  ///     std::thread::sleep(std::time::Duration::from_millis(150));
-  ///     // emit a download progress event to all listeners
-  ///     window.emit_to(EventTarget::any(), "download-progress", i);
-  ///     // emit an event to listeners that used App::listen or AppHandle::listen
-  ///     window.emit_to(EventTarget::app(), "download-progress", i);
-  ///     // emit an event to any webview/window/webviewWindow matching the given label
-  ///     window.emit_to("updater", "download-progress", i); // similar to using EventTarget::labeled
-  ///     window.emit_to(EventTarget::labeled("updater"), "download-progress", i);
-  ///     // emit an event to listeners that used WebviewWindow::listen
-  ///     window.emit_to(EventTarget::webview_window("updater"), "download-progress", i);
-  ///   }
-  /// }
-  /// ```
-  fn emit_to<I, S>(&self, target: I, event: &str, payload: S) -> crate::Result<()>
-  where
-    I: Into<EventTarget>,
-    S: Serialize + Clone,
-  {
-    self.manager().emit_to(target, event, payload)
-  }
-
-  /// Emits an event to all [targets](EventTarget) based on the given filter.
-  ///
-  /// # Examples
-  /// ```
-  /// use tauri::{Emitter, EventTarget};
-  ///
-  /// #[tauri::command]
-  /// fn download(window: tauri::WebviewWindow) {
-  ///   for i in 1..100 {
-  ///     std::thread::sleep(std::time::Duration::from_millis(150));
-  ///     // emit a download progress event to the updater window
-  ///     window.emit_filter("download-progress", i, |t| match t {
-  ///       EventTarget::WebviewWindow { label } => label == "main",
-  ///       _ => false,
-  ///     });
-  ///   }
-  /// }
-  ///   ```
-  fn emit_filter<S, F>(&self, event: &str, payload: S, filter: F) -> crate::Result<()>
-  where
-    S: Serialize + Clone,
-    F: Fn(&EventTarget) -> bool,
-  {
-    self.manager().emit_filter(event, payload, filter)
-  }
-}
+impl<R: Runtime> Emitter<R> for WebviewWindow<R> {}
 
 impl<R: Runtime> Manager<R> for WebviewWindow<R> {
   fn resources_table(&self) -> MutexGuard<'_, ResourceTable> {
