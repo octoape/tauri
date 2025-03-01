@@ -8,13 +8,34 @@
 )]
 
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 fn handle_file_associations(app: AppHandle, files: Vec<PathBuf>) {
+  // -- Scope handling start --
+
+  // You can remove this block if you only want to know about the paths, but not actually "use" them in the frontend.
+
+  // This requires the `fs` tauri plugin and is required to make the plugin's frontend work:
+  // use tauri_plugin_fs::FsExt;
+  // let fs_scope = app.fs_scope();
+
+  // This is for the `asset:` protocol to work:
+  let asset_protocol_scope = app.asset_protocol_scope();
+
+  for file in &files {
+    // This requires the `fs` plugin:
+    // let _ = fs_scope.allow_file(file);
+
+    // This is for the `asset:` protocol:
+    let _ = asset_protocol_scope.allow_file(file);
+  }
+
+  // -- Scope handling end --
+
   let files = files
     .into_iter()
     .map(|f| {
-      let file = f.to_string_lossy().replace("\\", "\\\\"); // escape backslash
+      let file = f.to_string_lossy().replace('\\', "\\\\"); // escape backslash
       format!("\"{file}\"",) // wrap in quotes for JS array
     })
     .collect::<Vec<_>>()
@@ -28,7 +49,7 @@ fn handle_file_associations(app: AppHandle, files: Vec<PathBuf>) {
 
 fn main() {
   tauri::Builder::default()
-    .setup(|app| {
+    .setup(|#[allow(unused_variables)] app| {
       #[cfg(any(windows, target_os = "linux"))]
       {
         let mut files = Vec::new();
@@ -38,7 +59,7 @@ fn main() {
         // files may aslo be passed as `file://path/to/file`
         for maybe_file in std::env::args().skip(1) {
           // skip flags like -f or --flag
-          if maybe_file.starts_with("-") {
+          if maybe_file.starts_with('-') {
             continue;
           }
 

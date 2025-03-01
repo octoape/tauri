@@ -1,5 +1,128 @@
 # Changelog
 
+## \[2.4.0]
+
+### Enhancements
+
+- [`a2d36b8c3`](https://www.github.com/tauri-apps/tauri/commit/a2d36b8c34a8dcfc6736797ca5cd4665faf75e7e) ([#12181](https://www.github.com/tauri-apps/tauri/pull/12181) by [@bastiankistner](https://www.github.com/tauri-apps/tauri/../../bastiankistner)) Add an option to change the default background throttling policy (currently for WebKit only).
+- [`d6520a21c`](https://www.github.com/tauri-apps/tauri/commit/d6520a21ce02c3e2be2955999946c2cb7bdb07aa) ([#12541](https://www.github.com/tauri-apps/tauri/pull/12541) by [@FabianLars](https://www.github.com/tauri-apps/tauri/../../FabianLars)) Updated `wry` to 0.50, `windows` to 0.60, `webview2-com` to 0.36, and `objc2` to 0.6. This can be a **breaking change** if you use the `with_webview` API!
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.2.0`
+
+## \[2.3.0]
+
+### New Features
+
+- [`18bd639f6`](https://www.github.com/tauri-apps/tauri/commit/18bd639f6e22c0188aa219739f367b5bf5ab0398) ([#11798](https://www.github.com/tauri-apps/tauri/pull/11798) by [@lars-berger](https://www.github.com/tauri-apps/tauri/../../lars-berger)) Add `WebviewWindowBuilder/WebviewBuilder::data_store_identifier` on macOS.
+- [`dc4d79477`](https://www.github.com/tauri-apps/tauri/commit/dc4d79477665bc3bfefb4048772414cf5d78e3df) ([#11628](https://www.github.com/tauri-apps/tauri/pull/11628) by [@SpikeHD](https://www.github.com/tauri-apps/tauri/../../SpikeHD)) Add `WebviewWindowBuilder/WebviewBuilder::extensions_path` on Linux and Windows.
+- [`020ea0556`](https://www.github.com/tauri-apps/tauri/commit/020ea05561348dcd6d2a7df358f8a5190f661ba2) ([#11661](https://www.github.com/tauri-apps/tauri/pull/11661) by [@ahqsoftwares](https://www.github.com/tauri-apps/tauri/../../ahqsoftwares)) Add badging APIs:
+
+  - `Window/WebviewWindow::set_badge_count` for Linux, macOS and IOS.
+  - `Window/WebviewWindow::set_overlay_icon` for Windows Only.
+  - `Window/WebviewWindow::set_badge_label`for macOS Only.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.1.1`
+
+## \[2.2.0]
+
+### New Features
+
+- [`4d545ab3c`](https://www.github.com/tauri-apps/tauri/commit/4d545ab3ca228c8a21b966b709f84a0da2864479) ([#11486](https://www.github.com/tauri-apps/tauri/pull/11486) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Added `Window::set_background_color` and `WindowBuilder::background_color`.
+- [`f37e97d41`](https://www.github.com/tauri-apps/tauri/commit/f37e97d410c4a219e99f97692da05ca9d8e0ba3a) ([#11477](https://www.github.com/tauri-apps/tauri/pull/11477) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `WebviewWindowBuilder/WebviewBuilder::use_https_scheme` to choose whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android
+- [`cbc095ec5`](https://www.github.com/tauri-apps/tauri/commit/cbc095ec5fe7de29b5c9265576d4e071ec159c1c) ([#11451](https://www.github.com/tauri-apps/tauri/pull/11451) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `WebviewWindowBuilder::devtools` and `WebviewBuilder::devtools` to enable or disable devtools for a specific webview.
+- [`2a75c64b5`](https://www.github.com/tauri-apps/tauri/commit/2a75c64b5431284e7340e8743d4ea56a62c75466) ([#11469](https://www.github.com/tauri-apps/tauri/pull/11469) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Added `WindowBuilder/WebviewWindowBuilder::window_classname` method to specify the name of the window class on Windows.
+
+### Bug Fixes
+
+- [`129414faa`](https://www.github.com/tauri-apps/tauri/commit/129414faa4e027c9035d56614682cacc0335a6a0) ([#11569](https://www.github.com/tauri-apps/tauri/pull/11569) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Fix webview not focused by default.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.1.0`
+
+## \[2.1.1]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.2`
+
+## \[2.1.0]
+
+### Bug Fixes
+
+- [`2d087ee4b`](https://www.github.com/tauri-apps/tauri/commit/2d087ee4b7d3e8849933f81284e4f5ed1aaa6455) ([#11268](https://www.github.com/tauri-apps/tauri/pull/11268) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) On Linux, fix commands, that use `Webview` or `WebviewWindow` as an argument, receiving an incorrect webview when using multi webviews.
+- [`2d087ee4b`](https://www.github.com/tauri-apps/tauri/commit/2d087ee4b7d3e8849933f81284e4f5ed1aaa6455) ([#11268](https://www.github.com/tauri-apps/tauri/pull/11268) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) On Linux, fix events only emitted to first webview only when using multi webviews.
+- [`2d087ee4b`](https://www.github.com/tauri-apps/tauri/commit/2d087ee4b7d3e8849933f81284e4f5ed1aaa6455) ([#11268](https://www.github.com/tauri-apps/tauri/pull/11268) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) On Linux, fix custom protocols receiving an incorrect webview label when using multi webviews
+
+## \[2.0.1]
+
+### What's Changed
+
+- [`0ab2b3306`](https://www.github.com/tauri-apps/tauri/commit/0ab2b330644b6419f6cee1d5377bfb5cdda2ccf9) ([#11205](https://www.github.com/tauri-apps/tauri/pull/11205) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Downgrade MSRV to 1.77.2 to support Windows 7.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.1`
+
+## \[2.0.0]
+
+### What's Changed
+
+- [`382ed482b`](https://www.github.com/tauri-apps/tauri/commit/382ed482bd08157c39e62f9a0aaad8802f1092cb) Bump MSRV to 1.78.
+- [`637285790`](https://www.github.com/tauri-apps/tauri/commit/6372857905ae9c0aedb7f482ddf6cf9f9836c9f2) Promote to v2 stable!
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0`
+
+## \[2.0.0-rc.13]
+
+### New Features
+
+- [`a247170e1`](https://www.github.com/tauri-apps/tauri/commit/a247170e1f620a9b012274b11cfe51e90327d6e9) ([#11056](https://www.github.com/tauri-apps/tauri/pull/11056) by [@SpikeHD](https://www.github.com/tauri-apps/tauri/../../SpikeHD)) Expose the ability to enabled browser extensions in WebView2 on Windows.
+- [`9014a3f17`](https://www.github.com/tauri-apps/tauri/commit/9014a3f1765ca406ea5c3e5224267a79c52cd53d) ([#11066](https://www.github.com/tauri-apps/tauri/pull/11066) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `WebviewWindow::clear_all_browsing_data` and `Webview::clear_all_browsing_data` to clear the webview browsing data.
+- [`95df53a2e`](https://www.github.com/tauri-apps/tauri/commit/95df53a2ed96873cd35a4b14a5e312d07e4e3004) ([#11143](https://www.github.com/tauri-apps/tauri/pull/11143) by [@Legend-Master](https://www.github.com/tauri-apps/tauri/../../Legend-Master)) Add the ability to set theme dynamically using `Window::set_theme`, `App::set_theme`
+- [`d9d2502b4`](https://www.github.com/tauri-apps/tauri/commit/d9d2502b41e39efde679e30c8955006e2ba9ea64) ([#11140](https://www.github.com/tauri-apps/tauri/pull/11140) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `WebviewDispatch::hide` and `WebviewDispatch::show` methods.
+- [`de7414aab`](https://www.github.com/tauri-apps/tauri/commit/de7414aab935e45540594ea930eb60bae4dbc979) ([#11154](https://www.github.com/tauri-apps/tauri/pull/11154) by [@amrbashir](https://www.github.com/tauri-apps/tauri/../../amrbashir)) Add `Window::set_enabled` and `Window::is_enabled` methods
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.13`
+
+## \[2.0.0-rc.12]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.12`
+
+## \[2.0.0-rc.11]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.11`
+
+## \[2.0.0-rc.10]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.10`
+
+## \[2.0.0-rc.9]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.9`
+
+## \[2.0.0-rc.8]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.8`
+
 ## \[2.0.0-rc.7]
 
 ### Dependencies

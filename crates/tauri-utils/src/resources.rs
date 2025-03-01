@@ -142,7 +142,7 @@ pub struct ResourcePathsIter<'a> {
   glob_iter: Option<glob::Paths>,
 }
 
-impl<'a> ResourcePathsIter<'a> {
+impl ResourcePathsIter<'_> {
   fn next_glob_iter(&mut self) -> Option<crate::Result<Resource>> {
     let entry = self.glob_iter.as_mut().unwrap().next()?;
 
@@ -237,10 +237,7 @@ impl<'a> ResourcePathsIter<'a> {
     self.current_path = None;
 
     let pattern = match &mut self.pattern_iter {
-      PatternIter::Slice(iter) => match iter.next() {
-        Some(pattern) => pattern,
-        None => return None,
-      },
+      PatternIter::Slice(iter) => iter.next()?,
       PatternIter::Map(iter) => match iter.next() {
         Some((pattern, dest)) => {
           self.current_pattern = Some(pattern.clone());
@@ -258,7 +255,10 @@ impl<'a> ResourcePathsIter<'a> {
       };
       match self.next_glob_iter() {
         Some(r) => return Some(r),
-        None => self.glob_iter = None,
+        None => {
+          self.glob_iter = None;
+          return Some(Err(crate::Error::GlobPathNotFound(pattern.clone())));
+        }
       }
     }
 
@@ -267,7 +267,7 @@ impl<'a> ResourcePathsIter<'a> {
   }
 }
 
-impl<'a> Iterator for ResourcePaths<'a> {
+impl Iterator for ResourcePaths<'_> {
   type Item = crate::Result<PathBuf>;
 
   fn next(&mut self) -> Option<crate::Result<PathBuf>> {
@@ -275,7 +275,7 @@ impl<'a> Iterator for ResourcePaths<'a> {
   }
 }
 
-impl<'a> Iterator for ResourcePathsIter<'a> {
+impl Iterator for ResourcePathsIter<'_> {
   type Item = crate::Result<Resource>;
 
   fn next(&mut self) -> Option<crate::Result<Resource>> {
@@ -360,6 +360,8 @@ mod tests {
       Path::new("src/index.html"),
       Path::new("src/style.css"),
       Path::new("src/script.js"),
+      Path::new("src/dir/another-dir/file1.txt"),
+      Path::new("src/dir/another-dir2/file2.txt"),
     ];
 
     for path in paths {
@@ -369,7 +371,7 @@ mod tests {
   }
 
   #[test]
-  #[serial_test::serial]
+  #[serial_test::serial(resources)]
   fn resource_paths_iter_slice_allow_walk() {
     setup_test_dirs();
 
@@ -418,7 +420,7 @@ mod tests {
   }
 
   #[test]
-  #[serial_test::serial]
+  #[serial_test::serial(resources)]
   fn resource_paths_iter_slice_no_walk() {
     setup_test_dirs();
 
@@ -457,7 +459,7 @@ mod tests {
   }
 
   #[test]
-  #[serial_test::serial]
+  #[serial_test::serial(resources)]
   fn resource_paths_iter_map_allow_walk() {
     setup_test_dirs();
 
@@ -513,7 +515,7 @@ mod tests {
   }
 
   #[test]
-  #[serial_test::serial]
+  #[serial_test::serial(resources)]
   fn resource_paths_iter_map_no_walk() {
     setup_test_dirs();
 
@@ -549,5 +551,66 @@ mod tests {
         panic!("{resource:?} was expected but not found in {resources:?}");
       }
     }
+  }
+
+  #[test]
+  #[serial_test::serial(resources)]
+  fn resource_paths_errors() {
+    setup_test_dirs();
+
+    let dir = std::env::current_dir().unwrap().join("src-tauri");
+    let _ = std::env::set_current_dir(dir);
+
+    let resources = ResourcePaths::from_map(
+      &std::collections::HashMap::from_iter([
+        ("../non-existent-file".into(), "file".into()),
+        ("../non-existent-dir".into(), "dir".into()),
+        // exists but not allowed to walk
+        ("../src".into(), "dir2".into()),
+        // doesn't exist but it is a glob and will return an error
+        ("../non-existent-glob-dir/*".into(), "glob".into()),
+        // exists but only contains directories and will not produce any values
+        ("../src/dir/*".into(), "dir3".into()),
+      ]),
+      false,
+    )
+    .iter()
+    .collect::<Vec<_>>();
+
+    assert_eq!(resources.len(), 4);
+
+    assert!(resources.iter().all(|r| r.is_err()));
+
+    // hashmap order is not guaranteed so we check the error variant exists and how many
+    assert!(resources
+      .iter()
+      .any(|r| matches!(r, Err(crate::Error::ResourcePathNotFound(_)))));
+    assert_eq!(
+      resources
+        .iter()
+        .filter(|r| matches!(r, Err(crate::Error::ResourcePathNotFound(_))))
+        .count(),
+      2
+    );
+    assert!(resources
+      .iter()
+      .any(|r| matches!(r, Err(crate::Error::NotAllowedToWalkDir(_)))));
+    assert_eq!(
+      resources
+        .iter()
+        .filter(|r| matches!(r, Err(crate::Error::NotAllowedToWalkDir(_))))
+        .count(),
+      1
+    );
+    assert!(resources
+      .iter()
+      .any(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_)))));
+    assert_eq!(
+      resources
+        .iter()
+        .filter(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_))))
+        .count(),
+      1
+    );
   }
 }
