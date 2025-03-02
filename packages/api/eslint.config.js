@@ -8,7 +8,7 @@ import prettierConfig from 'eslint-config-prettier'
 import securityPlugin from 'eslint-plugin-security'
 import tseslint from 'typescript-eslint'
 
-/** @type {import('eslint').Linter.FlatConfig[]} */
+/** @type {import('eslint').Linter.Config} */
 export default [
   eslint.configs.recommended,
   prettierConfig,
@@ -47,7 +47,15 @@ export default [
       '@typescript-eslint/default-param-last': 'off',
       '@typescript-eslint/strict-boolean-expressions': 0,
       'no-return-await': 'warn',
-      '@typescript-eslint/return-await': 'off'
+      '@typescript-eslint/return-await': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_'
+        }
+      ]
     }
   }
 ]

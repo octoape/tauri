@@ -5,6 +5,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use http::{header::CONTENT_TYPE, Request, Response as HttpResponse, StatusCode};
+use tauri_utils::config::HeaderAddition;
 
 use crate::{
   manager::{webview::PROXY_DEV_SERVER, AppManager},
@@ -30,7 +31,10 @@ pub fn get<R: Runtime>(
 ) -> UriSchemeProtocolHandler {
   #[cfg(all(dev, mobile))]
   let url = {
-    let mut url = manager.get_url().as_str().to_string();
+    let mut url = manager
+      .get_url(window_origin.starts_with("https"))
+      .as_str()
+      .to_string();
     if url.ends_with('/') {
       url.pop();
     }
@@ -42,7 +46,7 @@ pub fn get<R: Runtime>(
   #[cfg(all(dev, mobile))]
   let response_cache = Arc::new(Mutex::new(HashMap::new()));
 
-  Box::new(move |request, responder| {
+  Box::new(move |_, request, responder| {
     match get_response(
       request,
       &manager,
@@ -57,7 +61,7 @@ pub fn get<R: Runtime>(
           .status(StatusCode::INTERNAL_SERVER_ERROR)
           .header(CONTENT_TYPE, mime::TEXT_PLAIN.essence_str())
           .header("Access-Control-Allow-Origin", &window_origin)
-          .body(e.to_string().as_bytes().to_vec())
+          .body(e.to_string().into_bytes())
           .unwrap(),
       ),
     }
@@ -95,14 +99,20 @@ fn get_response<R: Runtime>(
     // where `$P` is not `localhost/*`
     .unwrap_or_else(|| "".to_string());
 
-  let mut builder = HttpResponse::builder().header("Access-Control-Allow-Origin", window_origin);
+  let mut builder = HttpResponse::builder()
+    .add_configured_headers(manager.config.app.security.headers.as_ref())
+    .header("Access-Control-Allow-Origin", window_origin);
 
   #[cfg(all(dev, mobile))]
   let mut response = {
     let decoded_path = percent_encoding::percent_decode(path.as_bytes())
       .decode_utf8_lossy()
       .to_string();
-    let url = format!("{url}{decoded_path}");
+    let url = format!(
+      "{}/{}",
+      url.trim_end_matches('/'),
+      decoded_path.trim_start_matches('/')
+    );
 
     let mut proxy_builder = reqwest::ClientBuilder::new()
       .build()
@@ -111,7 +121,7 @@ fn get_response<R: Runtime>(
     for (name, value) in request.headers() {
       proxy_builder = proxy_builder.header(name, value);
     }
-    match crate::async_runtime::block_on(proxy_builder.send()) {
+    match crate::async_runtime::safe_block_on(proxy_builder.send()) {
       Ok(r) => {
         let mut response_cache_ = response_cache.lock().unwrap();
         let mut response = None;
@@ -123,7 +133,7 @@ fn get_response<R: Runtime>(
         } else {
           let status = r.status();
           let headers = r.headers().clone();
-          let body = crate::async_runtime::block_on(r.bytes())?;
+          let body = crate::async_runtime::safe_block_on(r.bytes())?;
           let response = CachedResponse {
             status,
             headers,
@@ -148,7 +158,8 @@ fn get_response<R: Runtime>(
 
   #[cfg(not(all(dev, mobile)))]
   let mut response = {
-    let asset = manager.get_asset(path)?;
+    let use_https_scheme = request.uri().scheme() == Some(&http::uri::Scheme::HTTPS);
+    let asset = manager.get_asset(path, use_https_scheme)?;
     builder = builder.header(CONTENT_TYPE, &asset.mime_type);
     if let Some(csp) = &asset.csp_header {
       builder = builder.header("Content-Security-Policy", csp);

@@ -5,8 +5,9 @@ Default permissions for the plugin.
 - `allow-version`
 - `allow-name`
 - `allow-tauri-version`
+- `allow-identifier`
 
-## Permission Table 
+## Permission Table
 
 <table>
 <tr>
@@ -96,6 +97,32 @@ Denies the default_window_icon command without any pre-configured scope.
 <tr>
 <td>
 
+`core:app:allow-identifier`
+
+</td>
+<td>
+
+Enables the identifier command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:app:deny-identifier`
+
+</td>
+<td>
+
+Denies the identifier command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `core:app:allow-name`
 
 </td>
@@ -115,6 +142,32 @@ Enables the name command without any pre-configured scope.
 <td>
 
 Denies the name command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:app:allow-set-app-theme`
+
+</td>
+<td>
+
+Enables the set_app_theme command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:app:deny-set-app-theme`
+
+</td>
+<td>
+
+Denies the set_app_theme command without any pre-configured scope.
 
 </td>
 </tr>

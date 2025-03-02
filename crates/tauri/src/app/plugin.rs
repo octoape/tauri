@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+use tauri_utils::Theme;
+
 use crate::{
   command,
   plugin::{Builder, TauriPlugin},
@@ -21,6 +23,11 @@ pub fn name<R: Runtime>(app: AppHandle<R>) -> String {
 #[command(root = "crate")]
 pub fn tauri_version() -> &'static str {
   crate::VERSION
+}
+
+#[command(root = "crate")]
+pub fn identifier<R: Runtime>(app: AppHandle<R>) -> String {
+  app.config().identifier.clone()
 }
 
 #[command(root = "crate")]
@@ -50,15 +57,22 @@ pub fn default_window_icon<R: Runtime>(
   })
 }
 
+#[command(root = "crate")]
+pub async fn set_app_theme<R: Runtime>(app: AppHandle<R>, theme: Option<Theme>) {
+  app.set_theme(theme);
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
   Builder::new("app")
     .invoke_handler(crate::generate_handler![
       version,
       name,
       tauri_version,
+      identifier,
       app_show,
       app_hide,
       default_window_icon,
+      set_app_theme,
     ])
     .build()
 }

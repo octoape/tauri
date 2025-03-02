@@ -1,5 +1,112 @@
 # Changelog
 
+## \[2.0.6]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.2.0`
+- Upgraded to `tauri-codegen@2.0.5`
+
+## \[2.0.5]
+
+### Bug Fixes
+
+- [`848d0e060`](https://www.github.com/tauri-apps/tauri/commit/848d0e060e6eb3c8e9e8175adc7896587b5a947d) ([#12270](https://www.github.com/tauri-apps/tauri/pull/12270) by [@aurelj](https://www.github.com/tauri-apps/tauri/../../aurelj)) Update `cargo_toml` to `0.21.0`. This adds compatibility with Rust's 2024 Edition.
+- [`cd1d026f9`](https://www.github.com/tauri-apps/tauri/commit/cd1d026f9799c26b04acb64f49e7ee0a8b193049) ([#11961](https://www.github.com/tauri-apps/tauri/pull/11961) by [@Legend-Master](https://www.github.com/tauri-apps/tauri/../../Legend-Master)) Fix tauri fails to build if the project path contains glob characters
+
+## \[2.0.4]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.1.1`
+- Upgraded to `tauri-codegen@2.0.4`
+
+## \[2.0.3]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.1.0`
+- Upgraded to `tauri-codegen@2.0.3`
+
+## \[2.0.2]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.2`
+
+## \[2.0.1]
+
+### What's Changed
+
+- [`0ab2b3306`](https://www.github.com/tauri-apps/tauri/commit/0ab2b330644b6419f6cee1d5377bfb5cdda2ccf9) ([#11205](https://www.github.com/tauri-apps/tauri/pull/11205) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Downgrade MSRV to 1.77.2 to support Windows 7.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.1`
+- Upgraded to `tauri-codegen@2.0.1`
+
+## \[2.0.0]
+
+### What's Changed
+
+- [`382ed482b`](https://www.github.com/tauri-apps/tauri/commit/382ed482bd08157c39e62f9a0aaad8802f1092cb) Bump MSRV to 1.78.
+- [`637285790`](https://www.github.com/tauri-apps/tauri/commit/6372857905ae9c0aedb7f482ddf6cf9f9836c9f2) Promote to v2 stable!
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0`
+- Upgraded to `tauri-codegen@2.0.0`
+
+## \[2.0.0-rc.13]
+
+### Bug Fixes
+
+- [`1efa5e718`](https://www.github.com/tauri-apps/tauri/commit/1efa5e7184009537b688a395596c696173ae0231) ([#11099](https://www.github.com/tauri-apps/tauri/pull/11099) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Rerun build script if the platform-specific configuration file changes.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.13`
+- Upgraded to `tauri-codegen@2.0.0-rc.13`
+
+## \[2.0.0-rc.12]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.12`
+- Upgraded to `tauri-codegen@2.0.0-rc.12`
+
+## \[2.0.0-rc.11]
+
+### Bug Fixes
+
+- [`9d468774a`](https://www.github.com/tauri-apps/tauri/commit/9d468774a94b5f5210a3012db2e58dbfab4755f4) ([#10975](https://www.github.com/tauri-apps/tauri/pull/10975) by [@FabianLars](https://www.github.com/tauri-apps/tauri/../../FabianLars)) The executable and NSIS installer on Windows will now use the `productName` config for the `FileDescription` property instead of `shortDescription`.
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.11`
+- Upgraded to `tauri-codegen@2.0.0-rc.11`
+
+## \[2.0.0-rc.10]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.10`
+- Upgraded to `tauri-codegen@2.0.0-rc.10`
+
+## \[2.0.0-rc.9]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.9`
+- Upgraded to `tauri-codegen@2.0.0-rc.9`
+
+## \[2.0.0-rc.8]
+
+### Dependencies
+
+- Upgraded to `tauri-utils@2.0.0-rc.8`
+- Upgraded to `tauri-codegen@2.0.0-rc.8`
+
 ## \[2.0.0-rc.7]
 
 ### New Features
