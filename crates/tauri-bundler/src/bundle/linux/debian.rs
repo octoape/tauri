@@ -23,8 +23,8 @@
 // metadata, as well as generating the md5sums file.  Currently we do not
 // generate postinst or prerm files.
 
-use super::{super::common, freedesktop};
-use crate::Settings;
+use super::freedesktop;
+use crate::{bundle::settings::Arch, utils::fs_utils, Settings};
 use anyhow::Context;
 use flate2::{write::GzEncoder, Compression};
 use tar::HeaderMode;
@@ -41,12 +41,17 @@ use std::{
 /// Returns a vector of PathBuf that shows where the DEB was created.
 pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
   let arch = match settings.binary_arch() {
-    "x86" => "i386",
-    "x86_64" => "amd64",
-    // ARM64 is detected differently, armel isn't supported, so armhf is the only reasonable choice here.
-    "arm" => "armhf",
-    "aarch64" => "arm64",
-    other => other,
+    Arch::X86_64 => "amd64",
+    Arch::X86 => "i386",
+    Arch::AArch64 => "arm64",
+    Arch::Armhf => "armhf",
+    Arch::Armel => "armel",
+    target => {
+      return Err(crate::Error::ArchError(format!(
+        "Unsupported architecture: {:?}",
+        target
+      )));
+    }
   };
   let package_base_name = format!(
     "{}_{}_{}",
@@ -68,7 +73,7 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
 
   let (data_dir, _) = generate_data(settings, &package_dir)
     .with_context(|| "Failed to build data folders and files")?;
-  common::copy_custom_files(&settings.deb().files, &data_dir)
+  fs_utils::copy_custom_files(&settings.deb().files, &data_dir)
     .with_context(|| "Failed to copy custom files")?;
 
   // Generate control files.
@@ -108,7 +113,7 @@ pub fn generate_data(
 
   for bin in settings.binaries() {
     let bin_path = settings.binary_path(bin);
-    common::copy_file(&bin_path, bin_dir.join(bin.name()))
+    fs_utils::copy_file(&bin_path, &bin_dir.join(bin.name()))
       .with_context(|| format!("Failed to copy binary from {bin_path:?}"))?;
   }
 
@@ -133,10 +138,10 @@ pub fn generate_data(
 fn generate_changelog_file(settings: &Settings, data_dir: &Path) -> crate::Result<()> {
   if let Some(changelog_src_path) = &settings.deb().changelog {
     let mut src_file = File::open(changelog_src_path)?;
-    let bin_name = settings.main_binary_name();
-    let dest_path = data_dir.join(format!("usr/share/doc/{}/changelog.gz", bin_name));
+    let product_name = settings.product_name();
+    let dest_path = data_dir.join(format!("usr/share/doc/{product_name}/changelog.gz"));
 
-    let changelog_file = common::create_file(&dest_path)?;
+    let changelog_file = fs_utils::create_file(&dest_path)?;
     let mut gzip_encoder = GzEncoder::new(changelog_file, Compression::new(9));
     io::copy(&mut src_file, &mut gzip_encoder)?;
 
@@ -156,14 +161,24 @@ fn generate_control_file(
   // For more information about the format of this file, see
   // https://www.debian.org/doc/debian-policy/ch-controlfields.html
   let dest_path = control_dir.join("control");
-  let mut file = common::create_file(&dest_path)?;
+  let mut file = fs_utils::create_file(&dest_path)?;
   let package = heck::AsKebabCase(settings.product_name());
   writeln!(file, "Package: {}", package)?;
   writeln!(file, "Version: {}", settings.version_string())?;
   writeln!(file, "Architecture: {arch}")?;
   // Installed-Size must be divided by 1024, see https://www.debian.org/doc/debian-policy/ch-controlfields.html#installed-size
   writeln!(file, "Installed-Size: {}", total_dir_size(data_dir)? / 1024)?;
-  let authors = settings.authors_comma_separated().unwrap_or_default();
+  let authors = settings
+    .authors_comma_separated()
+    .or_else(|| settings.publisher().map(ToString::to_string))
+    .unwrap_or_else(|| {
+      settings
+        .bundle_identifier()
+        .split('.')
+        .nth(1)
+        .unwrap_or(settings.bundle_identifier())
+        .to_string()
+    });
 
   writeln!(file, "Maintainer: {authors}")?;
   if let Some(section) = &settings.deb().section {
@@ -182,6 +197,15 @@ fn generate_control_file(
   let dependencies = settings.deb().depends.as_ref().cloned().unwrap_or_default();
   if !dependencies.is_empty() {
     writeln!(file, "Depends: {}", dependencies.join(", "))?;
+  }
+  let dependencies = settings
+    .deb()
+    .recommends
+    .as_ref()
+    .cloned()
+    .unwrap_or_default();
+  if !dependencies.is_empty() {
+    writeln!(file, "Recommends: {}", dependencies.join(", "))?;
   }
   let provides = settings
     .deb()
@@ -270,7 +294,7 @@ fn create_script_file_from_path(from: &PathBuf, to: &PathBuf) -> crate::Result<(
 /// for each file within the `data_dir`.
 fn generate_md5sums(control_dir: &Path, data_dir: &Path) -> crate::Result<()> {
   let md5sums_path = control_dir.join("md5sums");
-  let mut md5sums_file = common::create_file(&md5sums_path)?;
+  let mut md5sums_file = fs_utils::create_file(&md5sums_path)?;
   for entry in WalkDir::new(data_dir) {
     let entry = entry?;
     let path = entry.path();
@@ -296,14 +320,14 @@ fn generate_md5sums(control_dir: &Path, data_dir: &Path) -> crate::Result<()> {
 /// Copy the bundle's resource files into an appropriate directory under the
 /// `data_dir`.
 fn copy_resource_files(settings: &Settings, data_dir: &Path) -> crate::Result<()> {
-  let resource_dir = data_dir.join("usr/lib").join(settings.main_binary_name());
+  let resource_dir = data_dir.join("usr/lib").join(settings.product_name());
   settings.copy_resources(&resource_dir)
 }
 
 /// Create an empty file at the given path, creating any parent directories as
 /// needed, then write `data` into the file.
 fn create_file_with_data<P: AsRef<Path>>(path: P, data: &str) -> crate::Result<()> {
-  let mut file = common::create_file(path.as_ref())?;
+  let mut file = fs_utils::create_file(path.as_ref())?;
   file.write_all(data.as_bytes())?;
   file.flush()?;
   Ok(())
@@ -352,7 +376,7 @@ fn create_tar_from_dir<P: AsRef<Path>, W: Write>(src_dir: P, dest_file: W) -> cr
 fn tar_and_gzip_dir<P: AsRef<Path>>(src_dir: P) -> crate::Result<PathBuf> {
   let src_dir = src_dir.as_ref();
   let dest_path = src_dir.with_extension("tar.gz");
-  let dest_file = common::create_file(&dest_path)?;
+  let dest_file = fs_utils::create_file(&dest_path)?;
   let gzip_encoder = GzEncoder::new(dest_file, Compression::default());
   let gzip_encoder = create_tar_from_dir(src_dir, gzip_encoder)?;
   let mut dest_file = gzip_encoder.finish()?;
@@ -363,7 +387,7 @@ fn tar_and_gzip_dir<P: AsRef<Path>>(src_dir: P) -> crate::Result<PathBuf> {
 /// Creates an `ar` archive from the given source files and writes it to the
 /// given destination path.
 fn create_archive(srcs: Vec<PathBuf>, dest: &Path) -> crate::Result<()> {
-  let mut builder = ar::Builder::new(common::create_file(dest)?);
+  let mut builder = ar::Builder::new(fs_utils::create_file(dest)?);
   for path in &srcs {
     builder.append_path(path)?;
   }

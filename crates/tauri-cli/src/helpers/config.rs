@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+use itertools::Itertools;
 use json_patch::merge;
 use serde_json::Value as JsonValue;
 
@@ -62,6 +63,8 @@ pub type ConfigHandle = Arc<Mutex<Option<ConfigMetadata>>>;
 
 pub fn wix_settings(config: WixConfig) -> tauri_bundler::WixSettings {
   tauri_bundler::WixSettings {
+    version: config.version,
+    upgrade_code: config.upgrade_code,
     language: tauri_bundler::WixLanguage(match config.language {
       WixLanguage::One(lang) => vec![(lang, Default::default())],
       WixLanguage::List(languages) => languages
@@ -90,7 +93,7 @@ pub fn wix_settings(config: WixConfig) -> tauri_bundler::WixSettings {
     enable_elevated_update_task: config.enable_elevated_update_task,
     banner_path: config.banner_path,
     dialog_image_path: config.dialog_image_path,
-    fips_compliant: var_os("TAURI_BUNDLER_WIX_FIPS_COMPLIANT").map_or(false, |v| v == "true"),
+    fips_compliant: var_os("TAURI_BUNDLER_WIX_FIPS_COMPLIANT").is_some_and(|v| v == "true"),
   }
 }
 
@@ -170,11 +173,11 @@ fn get_internal(
     || config_path.extension() == Some(OsStr::new("json5"))
   {
     let schema: JsonValue = serde_json::from_str(include_str!("../../config.schema.json"))?;
-    let schema = jsonschema::JSONSchema::compile(&schema).unwrap();
-    let result = schema.validate(&config);
-    if let Err(errors) = result {
+    let validator = jsonschema::validator_for(&schema).expect("Invalid schema");
+    let mut errors = validator.iter_errors(&config).peekable();
+    if errors.peek().is_some() {
       for error in errors {
-        let path = error.instance_path.clone().into_vec().join(" > ");
+        let path = error.instance_path.into_iter().join(" > ");
         if path.is_empty() {
           log::error!("`{}` error: {}", config_file_name, error);
         } else {

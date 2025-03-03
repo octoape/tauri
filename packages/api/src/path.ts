@@ -5,7 +5,7 @@
 /**
  * The path module provides utilities for working with file and directory paths.
  *
- * This package is also accessible with `window.__TAURI__.path` when [`app.withGlobalTauri`](https://tauri.app/v1/api/config/#appconfig.withglobaltauri) in `tauri.conf.json` is set to `true`.
+ * This package is also accessible with `window.__TAURI__.path` when [`app.withGlobalTauri`](https://v2.tauri.app/reference/config/#withglobaltauri) in `tauri.conf.json` is set to `true`.
  *
  * It is recommended to allowlist only the APIs you use for optimal bundle size and security.
  * @module
@@ -18,34 +18,33 @@ import { invoke } from './core'
  */
 enum BaseDirectory {
   Audio = 1,
-  Cache,
-  Config,
-  Data,
-  LocalData,
-  Document,
-  Download,
-  Picture,
-  Public,
-  Video,
-  Resource,
-  Temp,
-  AppConfig,
-  AppData,
-  AppLocalData,
-  AppCache,
-  AppLog,
-
-  Desktop,
-  Executable,
-  Font,
-  Home,
-  Runtime,
-  Template
+  Cache = 2,
+  Config = 3,
+  Data = 4,
+  LocalData = 5,
+  Document = 6,
+  Download = 7,
+  Picture = 8,
+  Public = 9,
+  Video = 10,
+  Resource = 11,
+  Temp = 12,
+  AppConfig = 13,
+  AppData = 14,
+  AppLocalData = 15,
+  AppCache = 16,
+  AppLog = 17,
+  Desktop = 18,
+  Executable = 19,
+  Font = 20,
+  Home = 21,
+  Runtime = 22,
+  Template = 23
 }
 
 /**
  * Returns the path to the suggested directory for your app's config files.
- * Resolves to `${configDir}/${bundleIdentifier}`, where `bundleIdentifier` is the value [`tauri.bundle.identifier`](https://tauri.app/v1/api/config/#bundleconfig.identifier) is configured in `tauri.conf.json`.
+ * Resolves to `${configDir}/${bundleIdentifier}`, where `bundleIdentifier` is the [`identifier`](https://v2.tauri.app/reference/config/#identifier) value configured in `tauri.conf.json`.
  * @example
  * ```typescript
  * import { appConfigDir } from '@tauri-apps/api/path';
@@ -62,7 +61,7 @@ async function appConfigDir(): Promise<string> {
 
 /**
  * Returns the path to the suggested directory for your app's data files.
- * Resolves to `${dataDir}/${bundleIdentifier}`, where `bundleIdentifier` is the value [`tauri.bundle.identifier`](https://tauri.app/v1/api/config/#bundleconfig.identifier) is configured in `tauri.conf.json`.
+ * Resolves to `${dataDir}/${bundleIdentifier}`, where `bundleIdentifier` is the [`identifier`](https://v2.tauri.app/reference/config/#identifier) value configured in `tauri.conf.json`.
  * @example
  * ```typescript
  * import { appDataDir } from '@tauri-apps/api/path';
@@ -79,7 +78,7 @@ async function appDataDir(): Promise<string> {
 
 /**
  * Returns the path to the suggested directory for your app's local data files.
- * Resolves to `${localDataDir}/${bundleIdentifier}`, where `bundleIdentifier` is the value [`tauri.bundle.identifier`](https://tauri.app/v1/api/config/#bundleconfig.identifier) is configured in `tauri.conf.json`.
+ * Resolves to `${localDataDir}/${bundleIdentifier}`, where `bundleIdentifier` is the [`identifier`](https://v2.tauri.app/reference/config/#identifier) value configured in `tauri.conf.json`.
  * @example
  * ```typescript
  * import { appLocalDataDir } from '@tauri-apps/api/path';
@@ -96,7 +95,7 @@ async function appLocalDataDir(): Promise<string> {
 
 /**
  * Returns the path to the suggested directory for your app's cache files.
- * Resolves to `${cacheDir}/${bundleIdentifier}`, where `bundleIdentifier` is the value [`tauri.bundle.identifier`](https://tauri.app/v1/api/config/#bundleconfig.identifier) is configured in `tauri.conf.json`.
+ * Resolves to `${cacheDir}/${bundleIdentifier}`, where `bundleIdentifier` is the [`identifier`](https://v2.tauri.app/reference/config/#identifier) value configured in `tauri.conf.json`.
  * @example
  * ```typescript
  * import { appCacheDir } from '@tauri-apps/api/path';
@@ -662,7 +661,7 @@ async function basename(path: string, ext?: string): Promise<string> {
  * @since 1.0.0
  */
 async function isAbsolute(path: string): Promise<boolean> {
-  return invoke('plugin:path|isAbsolute', { path })
+  return invoke('plugin:path|is_absolute', { path })
 }
 
 export {

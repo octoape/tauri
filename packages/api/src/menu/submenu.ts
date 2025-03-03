@@ -15,8 +15,10 @@ import { invoke } from '../core'
 import { type LogicalPosition, PhysicalPosition, type Window } from '../window'
 import { type ItemKind, MenuItemBase, newMenu } from './base'
 import { type MenuOptions } from './menu'
+import { Position } from '../dpi'
 
-function itemFromKind([rid, id, kind]: [number, string, ItemKind]):
+/** @ignore */
+export function itemFromKind([rid, id, kind]: [number, string, ItemKind]):
   | Submenu
   | MenuItem
   | PredefinedMenuItem
@@ -44,8 +46,8 @@ function itemFromKind([rid, id, kind]: [number, string, ItemKind]):
   /* eslint-enable @typescript-eslint/no-unsafe-return */
 }
 
-export type SubmenuOptions = Omit<MenuItemOptions, 'accelerator' | 'action'> &
-  MenuOptions
+export type SubmenuOptions = Omit<MenuItemOptions, 'accelerator' | 'action'>
+  & MenuOptions
 
 /** A type that is a submenu inside a {@linkcode Menu} or {@linkcode Submenu}. */
 export class Submenu extends MenuItemBase {
@@ -90,7 +92,7 @@ export class Submenu extends MenuItemBase {
   /**
    * Add a menu item to the end of this submenu.
    *
-   * ## Platform-specific:
+   * #### Platform-specific:
    *
    * - **macOS:** Only {@linkcode Submenu}s can be added to a {@linkcode Menu}.
    */
@@ -119,7 +121,7 @@ export class Submenu extends MenuItemBase {
   /**
    * Add a menu item to the beginning of this submenu.
    *
-   * ## Platform-specific:
+   * #### Platform-specific:
    *
    * - **macOS:** Only {@linkcode Submenu}s can be added to a {@linkcode Menu}.
    */
@@ -148,7 +150,7 @@ export class Submenu extends MenuItemBase {
   /**
    * Add a menu item to the specified position in this submenu.
    *
-   * ## Platform-specific:
+   * #### Platform-specific:
    *
    * - **macOS:** Only {@linkcode Submenu}s can be added to a {@linkcode Menu}.
    */
@@ -243,19 +245,11 @@ export class Submenu extends MenuItemBase {
     at?: PhysicalPosition | LogicalPosition,
     window?: Window
   ): Promise<void> {
-    let atValue = null
-    if (at) {
-      atValue = {} as Record<string, unknown>
-      atValue[`${at instanceof PhysicalPosition ? 'Physical' : 'Logical'}`] = {
-        x: at.x,
-        y: at.y
-      }
-    }
     return invoke('plugin:menu|popup', {
       rid: this.rid,
       kind: this.kind,
       window: window?.label ?? null,
-      at: atValue
+      at: at instanceof Position ? at : at ? new Position(at) : null
     })
   }
 

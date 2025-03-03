@@ -5,9 +5,59 @@
 /**
  * Invoke your custom commands.
  *
- * This package is also accessible with `window.__TAURI__.tauri` when [`app.withGlobalTauri`](https://tauri.app/v1/api/config/#appconfig.withglobaltauri) in `tauri.conf.json` is set to `true`.
+ * This package is also accessible with `window.__TAURI__.core` when [`app.withGlobalTauri`](https://v2.tauri.app/reference/config/#withglobaltauri) in `tauri.conf.json` is set to `true`.
  * @module
  */
+
+/**
+ * A key to be used to implement a special function
+ * on your types that define how your type should be serialized
+ * when passing across the IPC.
+ * @example
+ * Given a type in Rust that looks like this
+ * ```rs
+ * #[derive(serde::Serialize, serde::Deserialize)
+ * enum UserId {
+ *   String(String),
+ *   Number(u32),
+ * }
+ * ```
+ * `UserId::String("id")` would be serialized into `{ String: "id" }`
+ * and so we need to pass the same structure back to Rust
+ * ```ts
+ * import { SERIALIZE_TO_IPC_FN } from "@tauri-apps/api/core"
+ *
+ * class UserIdString {
+ *   id
+ *   constructor(id) {
+ *     this.id = id
+ *   }
+ *
+ *   [SERIALIZE_TO_IPC_FN]() {
+ *     return { String: this.id }
+ *   }
+ * }
+ *
+ * class UserIdNumber {
+ *   id
+ *   constructor(id) {
+ *     this.id = id
+ *   }
+ *
+ *   [SERIALIZE_TO_IPC_FN]() {
+ *     return { Number: this.id }
+ *   }
+ * }
+ *
+ *
+ * type UserId = UserIdString | UserIdNumber
+ * ```
+ *
+ */
+// if this value changes, make sure to update it in:
+// 1. ipc.js
+// 2. process-ipc-message-fn.js
+export const SERIALIZE_TO_IPC_FN = '__TAURI_TO_IPC_KEY__'
 
 /**
  * Transforms a callback function to a string identifier that can be passed to the backend.
@@ -31,42 +81,31 @@ class Channel<T = unknown> {
   #onmessage: (response: T) => void = () => {
     // no-op
   }
+  // the id is used as a mechanism to preserve message order
   #nextMessageId = 0
-  #pendingMessages: Record<string, T> = {}
+  #pendingMessages: T[] = []
 
   constructor() {
     this.id = transformCallback(
       ({ message, id }: { message: T; id: number }) => {
-        // the id is used as a mechanism to preserve message order
-        if (id === this.#nextMessageId) {
-          this.#nextMessageId = id + 1
+        // Process the message if we're at the right order
+        if (id == this.#nextMessageId) {
           this.#onmessage(message)
+          this.#nextMessageId += 1
 
           // process pending messages
-          const pendingMessageIds = Object.keys(this.#pendingMessages)
-          if (pendingMessageIds.length > 0) {
-            let nextId = id + 1
-            for (const pendingId of pendingMessageIds.sort()) {
-              // if we have the next message, process it
-              if (parseInt(pendingId) === nextId) {
-                // eslint-disable-next-line security/detect-object-injection
-                const message = this.#pendingMessages[pendingId]
-                // eslint-disable-next-line security/detect-object-injection
-                delete this.#pendingMessages[pendingId]
-
-                this.#onmessage(message)
-
-                // move the id counter to the next message to check
-                nextId += 1
-              } else {
-                // we do not have the next message, let's wait
-                break
-              }
-            }
-            this.#nextMessageId = nextId
+          while (this.#nextMessageId in this.#pendingMessages) {
+            const message = this.#pendingMessages[this.#nextMessageId]
+            this.#onmessage(message)
+            // eslint-disable-next-line @typescript-eslint/no-array-delete
+            delete this.#pendingMessages[this.#nextMessageId]
+            this.#nextMessageId += 1
           }
-        } else {
-          this.#pendingMessages[id.toString()] = message
+        }
+        // Queue the message if we're not
+        else {
+          // eslint-disable-next-line security/detect-object-injection
+          this.#pendingMessages[id] = message
         }
       }
     )
@@ -80,8 +119,13 @@ class Channel<T = unknown> {
     return this.#onmessage
   }
 
-  toJSON(): string {
+  [SERIALIZE_TO_IPC_FN]() {
     return `__CHANNEL__:${this.id}`
+  }
+
+  toJSON(): string {
+    // eslint-disable-next-line security/detect-object-injection
+    return this[SERIALIZE_TO_IPC_FN]()
   }
 }
 
@@ -118,7 +162,7 @@ async function addPluginListener<T>(
 ): Promise<PluginListener> {
   const handler = new Channel<T>()
   handler.onmessage = cb
-  return invoke(`plugin:${plugin}|register_listener`, { event, handler }).then(
+  return invoke(`plugin:${plugin}|registerListener`, { event, handler }).then(
     () => new PluginListener(plugin, event, handler.id)
   )
 }
@@ -182,11 +226,11 @@ async function invoke<T>(
 
 /**
  * Convert a device file path to an URL that can be loaded by the webview.
- * Note that `asset:` and `http://asset.localhost` must be added to [`tauri.security.csp`](https://tauri.app/v1/api/config/#securityconfig.csp) in `tauri.conf.json`.
+ * Note that `asset:` and `http://asset.localhost` must be added to [`app.security.csp`](https://v2.tauri.app/reference/config/#csp-1) in `tauri.conf.json`.
  * Example CSP value: `"csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost"` to use the asset protocol on image sources.
  *
- * Additionally, `asset` must be added to [`tauri.allowlist.protocol`](https://tauri.app/v1/api/config/#allowlistconfig.protocol)
- * in `tauri.conf.json` and its access scope must be defined on the `assetScope` array on the same `protocol` object.
+ * Additionally, `"enable" : "true"` must be added to [`app.security.assetProtocol`](https://v2.tauri.app/reference/config/#assetprotocolconfig)
+ * in `tauri.conf.json` and its access scope must be defined on the `scope` array on the same `assetProtocol` object.
  *
  * @param  filePath The file path.
  * @param  protocol The protocol to use. Defaults to `asset`. You only need to set this when using a custom protocol.

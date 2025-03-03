@@ -14,20 +14,17 @@
   const processIpcMessage = __RAW_process_ipc_message_fn__
   const osName = __TEMPLATE_os_name__
   const fetchChannelDataCommand = __TEMPLATE_fetch_channel_data_command__
-  const linuxIpcProtocolEnabled = __TEMPLATE_linux_ipc_protocol_enabled__
   let customProtocolIpcFailed = false
 
-  // on Linux we only use the custom-protocol-based IPC if the linux-ipc-protocol Cargo feature is enabled
   // on Android we never use it because Android does not have support to reading the request body
-  const canUseCustomProtocol =
-    osName === 'linux' ? linuxIpcProtocolEnabled : osName !== 'android'
+  const canUseCustomProtocol = osName !== 'android'
 
   function sendIpcMessage(message) {
     const { cmd, callback, error, payload, options } = message
 
     if (
-      !customProtocolIpcFailed &&
-      (canUseCustomProtocol || cmd === fetchChannelDataCommand)
+      !customProtocolIpcFailed
+      && (canUseCustomProtocol || cmd === fetchChannelDataCommand)
     ) {
       const { contentType, data } = processIpcMessage(payload)
       fetch(window.__TAURI_INTERNALS__.convertFileSrc(cmd, 'ipc'), {

@@ -1,5 +1,30 @@
 # Changelog
 
+## \[2.0.3]
+
+### Bug Fixes
+
+- [`fb294af8e`](https://www.github.com/tauri-apps/tauri/commit/fb294af8e3717d547029f3bbf9323318e0d9861a) ([#12383](https://www.github.com/tauri-apps/tauri/pull/12383) by [@bicarlsen](https://www.github.com/tauri-apps/tauri/../../bicarlsen)) Parse ms:edgeOptions separately to prevent `invalid argument` errors.
+
+## \[2.0.2]
+
+### Enhancements
+
+- [`70f96e322`](https://www.github.com/tauri-apps/tauri/commit/70f96e3222871a1931a18d6093d7efcbc59e7fee) ([#12240](https://www.github.com/tauri-apps/tauri/pull/12240) by [@getong](https://www.github.com/tauri-apps/tauri/../../getong)) Updated `hyper` to version 1. This won't affect the user facing API.
+
+## \[2.0.1]
+
+### What's Changed
+
+- [`0ab2b3306`](https://www.github.com/tauri-apps/tauri/commit/0ab2b330644b6419f6cee1d5377bfb5cdda2ccf9) ([#11205](https://www.github.com/tauri-apps/tauri/pull/11205) by [@lucasfernog](https://www.github.com/tauri-apps/tauri/../../lucasfernog)) Downgrade MSRV to 1.77.2 to support Windows 7.
+
+## \[2.0.0]
+
+### What's Changed
+
+- [`382ed482b`](https://www.github.com/tauri-apps/tauri/commit/382ed482bd08157c39e62f9a0aaad8802f1092cb) Bump MSRV to 1.78.
+- [`637285790`](https://www.github.com/tauri-apps/tauri/commit/6372857905ae9c0aedb7f482ddf6cf9f9836c9f2) Promote to v2 stable!
+
 ## \[0.1.5]
 
 ### Bug Fixes

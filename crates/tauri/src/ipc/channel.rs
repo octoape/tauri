@@ -24,7 +24,6 @@ use super::{CallbackFn, InvokeError, InvokeResponseBody, IpcResponse, Request, R
 
 pub const IPC_PAYLOAD_PREFIX: &str = "__CHANNEL__:";
 pub const CHANNEL_PLUGIN_NAME: &str = "__TAURI_CHANNEL__";
-// TODO: ideally this const references CHANNEL_PLUGIN_NAME
 pub const FETCH_CHANNEL_DATA_COMMAND: &str = "plugin:__TAURI_CHANNEL__|fetch";
 pub(crate) const CHANNEL_ID_HEADER_NAME: &str = "Tauri-Channel-Id";
 
@@ -36,7 +35,6 @@ static CHANNEL_DATA_COUNTER: AtomicU32 = AtomicU32::new(0);
 pub struct ChannelDataIpcQueue(pub(crate) Arc<Mutex<HashMap<u32, InvokeResponseBody>>>);
 
 /// An IPC channel.
-#[derive(Clone)]
 pub struct Channel<TSend = InvokeResponseBody> {
   id: u32,
   on_message: Arc<dyn Fn(InvokeResponseBody) -> crate::Result<()> + Send + Sync>,
@@ -49,6 +47,16 @@ const _: () = {
   #[specta(remote = super::Channel, rename = "TAURI_CHANNEL")]
   struct Channel<TSend>(std::marker::PhantomData<TSend>);
 };
+
+impl<TSend> Clone for Channel<TSend> {
+  fn clone(&self) -> Self {
+    Self {
+      id: self.id,
+      on_message: self.on_message.clone(),
+      phantom: Default::default(),
+    }
+  }
+}
 
 impl<TSend> Serialize for Channel<TSend> {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -101,6 +109,14 @@ impl JavaScriptChannelId {
     let counter = AtomicUsize::new(0);
 
     Channel::new_with_id(callback_id.0, move |body| {
+      let i = counter.fetch_add(1, Ordering::Relaxed);
+
+      if let Some(interceptor) = &webview.manager.channel_interceptor {
+        if interceptor(&webview, callback_id, i, &body) {
+          return Ok(());
+        }
+      }
+
       let data_id = CHANNEL_DATA_COUNTER.fetch_add(1, Ordering::Relaxed);
 
       webview
@@ -109,8 +125,6 @@ impl JavaScriptChannelId {
         .lock()
         .unwrap()
         .insert(data_id, body);
-
-      let i = counter.fetch_add(1, Ordering::Relaxed);
 
       webview.eval(&format!(
         "window.__TAURI_INTERNALS__.invoke('{FETCH_CHANNEL_DATA_COMMAND}', null, {{ headers: {{ '{CHANNEL_ID_HEADER_NAME}': '{data_id}' }} }}).then((response) => window['_' + {}]({{ message: response, id: {i} }})).catch(console.error)",
@@ -199,7 +213,7 @@ impl<TSend> Channel<TSend> {
   }
 }
 
-impl<'de, R: Runtime, TSend: Clone> CommandArg<'de, R> for Channel<TSend> {
+impl<'de, R: Runtime, TSend> CommandArg<'de, R> for Channel<TSend> {
   /// Grabs the [`Webview`] from the [`CommandItem`] and returns the associated [`Channel`].
   fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
     let name = command.name;

@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 use std::{
-  fs::{create_dir_all, File},
-  io::{Cursor, Read, Write},
+  fs::create_dir_all,
   path::{Path, PathBuf},
 };
 
-use sha2::Digest;
-use zip::ZipArchive;
+use ureq::ResponseExt;
+
+use crate::utils::http_utils::download;
 
 pub const WEBVIEW2_BOOTSTRAPPER_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 pub const WEBVIEW2_OFFLINE_INSTALLER_X86_URL: &str =
@@ -24,9 +24,12 @@ pub const WIX_OUTPUT_FOLDER_NAME: &str = "msi";
 pub const WIX_UPDATER_OUTPUT_FOLDER_NAME: &str = "msi-updater";
 
 pub fn webview2_guid_path(url: &str) -> crate::Result<(String, String)> {
-  let agent = ureq::AgentBuilder::new().try_proxy_from_env(true).build();
+  let agent: ureq::Agent = ureq::Agent::config_builder()
+    .proxy(ureq::Proxy::try_from_env())
+    .build()
+    .into();
   let response = agent.head(url).call().map_err(Box::new)?;
-  let final_url = response.get_url();
+  let final_url = response.get_uri().to_string();
   let remaining_url = final_url.strip_prefix(WEBVIEW2_URL_PREFIX).ok_or_else(|| {
     anyhow::anyhow!(
       "WebView2 URL prefix mismatch. Expected `{}`, found `{}`.",
@@ -65,104 +68,6 @@ pub fn download_webview2_offline_installer(base_path: &Path, arch: &str) -> crat
     std::fs::write(&file_path, download(url)?)?;
   }
   Ok(file_path)
-}
-
-pub fn download(url: &str) -> crate::Result<Vec<u8>> {
-  log::info!(action = "Downloading"; "{}", url);
-
-  let agent = ureq::AgentBuilder::new().try_proxy_from_env(true).build();
-  let response = agent.get(url).call().map_err(Box::new)?;
-  let mut bytes = Vec::new();
-  response.into_reader().read_to_end(&mut bytes)?;
-  Ok(bytes)
-}
-
-#[derive(Clone, Copy)]
-pub enum HashAlgorithm {
-  #[cfg(target_os = "windows")]
-  Sha256,
-  Sha1,
-}
-
-/// Function used to download a file and checks SHA256 to verify the download.
-pub fn download_and_verify(
-  url: &str,
-  hash: &str,
-  hash_algorithm: HashAlgorithm,
-) -> crate::Result<Vec<u8>> {
-  let data = download(url)?;
-  log::info!("validating hash");
-  verify_hash(&data, hash, hash_algorithm)?;
-  Ok(data)
-}
-
-pub fn verify_hash(data: &[u8], hash: &str, hash_algorithm: HashAlgorithm) -> crate::Result<()> {
-  match hash_algorithm {
-    #[cfg(target_os = "windows")]
-    HashAlgorithm::Sha256 => {
-      let hasher = sha2::Sha256::new();
-      verify_data_with_hasher(data, hash, hasher)
-    }
-    HashAlgorithm::Sha1 => {
-      let hasher = sha1::Sha1::new();
-      verify_data_with_hasher(data, hash, hasher)
-    }
-  }
-}
-
-fn verify_data_with_hasher(data: &[u8], hash: &str, mut hasher: impl Digest) -> crate::Result<()> {
-  hasher.update(data);
-
-  let url_hash = hasher.finalize().to_vec();
-  let expected_hash = hex::decode(hash)?;
-  if expected_hash == url_hash {
-    Ok(())
-  } else {
-    Err(crate::Error::HashError)
-  }
-}
-
-pub fn verify_file_hash<P: AsRef<Path>>(
-  path: P,
-  hash: &str,
-  hash_algorithm: HashAlgorithm,
-) -> crate::Result<()> {
-  let data = std::fs::read(path)?;
-  verify_hash(&data, hash, hash_algorithm)
-}
-
-/// Extracts the zips from memory into a usable path.
-#[allow(dead_code)]
-pub fn extract_zip(data: &[u8], path: &Path) -> crate::Result<()> {
-  let cursor = Cursor::new(data);
-
-  let mut zipa = ZipArchive::new(cursor)?;
-
-  for i in 0..zipa.len() {
-    let mut file = zipa.by_index(i)?;
-
-    if let Some(name) = file.enclosed_name() {
-      let dest_path = path.join(name);
-      if file.is_dir() {
-        create_dir_all(&dest_path)?;
-        continue;
-      }
-
-      let parent = dest_path.parent().expect("Failed to get parent");
-
-      if !parent.exists() {
-        create_dir_all(parent)?;
-      }
-
-      let mut buff: Vec<u8> = Vec::new();
-      file.read_to_end(&mut buff)?;
-      let mut fileout = File::create(dest_path).expect("Failed to open file");
-
-      fileout.write_all(&buff)?;
-    }
-  }
-
-  Ok(())
 }
 
 #[cfg(target_os = "windows")]

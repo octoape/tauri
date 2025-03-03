@@ -132,7 +132,7 @@ pub fn get_config(
               log::warn!("No code signing certificates found. You must add one and set the certificate development team ID on the `bundle > iOS > developmentTeam` config value or the `{APPLE_DEVELOPMENT_TEAM_ENV_VAR_NAME}` environment variable. To list the available certificates, run `tauri info`.");
               None
             }
-            1 =>None,
+            1 => None,
             _ => {
               log::warn!("You must set the code signing certificate development team ID on  the `bundle > iOS > developmentTeam` config value or the `{APPLE_DEVELOPMENT_TEAM_ENV_VAR_NAME}` environment variable. Available certificates: {}", teams.iter().map(|t| format!("{} (ID: {})", t.name, t.id)).collect::<Vec<String>>().join(", "));
               None
@@ -425,7 +425,7 @@ pub fn synchronize_project_config(
   config: &AppleConfig,
   tauri_config: &ConfigHandle,
   pbxproj: &mut pbxproj::Pbxproj,
-  export_options_list: &mut plist::Dictionary,
+  export_options_plist: &mut plist::Dictionary,
   project_config: &ProjectConfig,
   debug: bool,
 ) -> Result<()> {
@@ -447,18 +447,13 @@ pub fn synchronize_project_config(
     .find(|l| l.comment.contains("_iOS"))
   {
     for build_configuration_ref in xc_configuration_list.build_configurations {
-      pbxproj.set_build_settings(
-        &build_configuration_ref.id,
-        "CODE_SIGN_STYLE",
-        if manual_signing {
-          "Manual"
-        } else {
-          "Automatic"
-        },
-      );
+      if manual_signing {
+        pbxproj.set_build_settings(&build_configuration_ref.id, "CODE_SIGN_STYLE", "Manual");
+      }
 
       if let Some(team) = config.development_team() {
-        pbxproj.set_build_settings(&build_configuration_ref.id, "DEVELOPMENT_TEAM", team);
+        let team = format!("\"{team}\"");
+        pbxproj.set_build_settings(&build_configuration_ref.id, "DEVELOPMENT_TEAM", &team);
       }
 
       pbxproj.set_build_settings(
@@ -478,11 +473,12 @@ pub fn synchronize_project_config(
       }
 
       if let Some(id) = &project_config.team_id {
-        pbxproj.set_build_settings(&build_configuration_ref.id, "DEVELOPMENT_TEAM", id);
+        let id = format!("\"{id}\"");
+        pbxproj.set_build_settings(&build_configuration_ref.id, "DEVELOPMENT_TEAM", &id);
         pbxproj.set_build_settings(
           &build_configuration_ref.id,
           "\"DEVELOPMENT_TEAM[sdk=iphoneos*]\"",
-          id,
+          &id,
         );
       }
 
@@ -528,45 +524,49 @@ pub fn synchronize_project_config(
 
   if let Some(build_configuration) = build_configuration {
     if let Some(style) = build_configuration.get_build_setting("CODE_SIGN_STYLE") {
-      export_options_list.insert(
+      export_options_plist.insert(
         "signingStyle".to_string(),
         style.value.to_lowercase().into(),
       );
+    } else {
+      export_options_plist.insert("signingStyle".to_string(), "automatic".into());
     }
 
-    if let Some(identity) = build_configuration
-      .get_build_setting("\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\"")
-      .or_else(|| build_configuration.get_build_setting("CODE_SIGN_IDENTITY"))
-    {
-      export_options_list.insert(
-        "signingCertificate".to_string(),
-        identity.value.trim_matches('"').into(),
-      );
+    if manual_signing {
+      if let Some(identity) = build_configuration
+        .get_build_setting("\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\"")
+        .or_else(|| build_configuration.get_build_setting("CODE_SIGN_IDENTITY"))
+      {
+        export_options_plist.insert(
+          "signingCertificate".to_string(),
+          identity.value.trim_matches('"').into(),
+        );
+      }
+
+      let profile_uuid = project_config
+        .provisioning_profile_uuid
+        .clone()
+        .or_else(|| {
+          build_configuration
+            .get_build_setting("\"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]\"")
+            .or_else(|| build_configuration.get_build_setting("PROVISIONING_PROFILE_SPECIFIER"))
+            .map(|setting| setting.value.trim_matches('"').to_string())
+        });
+      if let Some(profile_uuid) = profile_uuid {
+        let mut provisioning_profiles = plist::Dictionary::new();
+        provisioning_profiles.insert(config.app().identifier().to_string(), profile_uuid.into());
+        export_options_plist.insert(
+          "provisioningProfiles".to_string(),
+          provisioning_profiles.into(),
+        );
+      }
     }
 
     if let Some(id) = build_configuration
       .get_build_setting("\"DEVELOPMENT_TEAM[sdk=iphoneos*]\"")
       .or_else(|| build_configuration.get_build_setting("DEVELOPMENT_TEAM"))
     {
-      export_options_list.insert("teamID".to_string(), id.value.trim_matches('"').into());
-    }
-
-    let profile_uuid = project_config
-      .provisioning_profile_uuid
-      .clone()
-      .or_else(|| {
-        build_configuration
-          .get_build_setting("\"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]\"")
-          .or_else(|| build_configuration.get_build_setting("PROVISIONING_PROFILE_SPECIFIER"))
-          .map(|setting| setting.value.trim_matches('"').to_string())
-      });
-    if let Some(profile_uuid) = profile_uuid {
-      let mut provisioning_profiles = plist::Dictionary::new();
-      provisioning_profiles.insert(config.app().identifier().to_string(), profile_uuid.into());
-      export_options_list.insert(
-        "provisioningProfiles".to_string(),
-        provisioning_profiles.into(),
-      );
+      export_options_plist.insert("teamID".to_string(), id.value.trim_matches('"').into());
     }
   }
 

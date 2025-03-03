@@ -4,10 +4,7 @@
 
 //! Platform helper functions.
 
-use std::{
-  fmt::Display,
-  path::{Path, PathBuf, MAIN_SEPARATOR},
-};
+use std::{fmt::Display, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +12,10 @@ use crate::{Env, PackageInfo};
 
 mod starting_binary;
 
+/// URI prefix of a Tauri asset.
+///
+/// This is referenced in the Tauri Android library,
+/// which resolves these assets to a file descriptor.
 #[cfg(target_os = "android")]
 pub const ANDROID_ASSET_PROTOCOL_URI_PREFIX: &str = "asset://localhost/";
 
@@ -225,8 +226,8 @@ pub fn target_triple() -> crate::Result<String> {
   Ok(format!("{arch}-{os}"))
 }
 
-#[cfg(not(test))]
-fn is_cargo_output_directory(path: &Path) -> bool {
+#[cfg(all(not(test), not(target_os = "android")))]
+fn is_cargo_output_directory(path: &std::path::Path) -> bool {
   path.join(".cargo-lock").exists()
 }
 
@@ -234,7 +235,7 @@ fn is_cargo_output_directory(path: &Path) -> bool {
 const CARGO_OUTPUT_DIRECTORIES: &[&str] = &["debug", "release", "custom-profile"];
 
 #[cfg(test)]
-fn is_cargo_output_directory(path: &Path) -> bool {
+fn is_cargo_output_directory(path: &std::path::Path) -> bool {
   let last_component = path
     .components()
     .last()
@@ -265,13 +266,22 @@ fn is_cargo_output_directory(path: &Path) -> bool {
 /// Android uses a special URI prefix that is resolved by the Tauri file system plugin `asset://localhost/`
 pub fn resource_dir(package_info: &PackageInfo, env: &Env) -> crate::Result<PathBuf> {
   #[cfg(target_os = "android")]
-  return Ok(PathBuf::from(ANDROID_ASSET_PROTOCOL_URI_PREFIX));
-  let exe = current_exe()?;
-  resource_dir_from(exe, package_info, env)
+  return resource_dir_android(package_info, env);
+  #[cfg(not(target_os = "android"))]
+  {
+    let exe = current_exe()?;
+    resource_dir_from(exe, package_info, env)
+  }
 }
 
+#[cfg(target_os = "android")]
+fn resource_dir_android(_package_info: &PackageInfo, _env: &Env) -> crate::Result<PathBuf> {
+  Ok(PathBuf::from(ANDROID_ASSET_PROTOCOL_URI_PREFIX))
+}
+
+#[cfg(not(target_os = "android"))]
 #[allow(unused_variables)]
-fn resource_dir_from<P: AsRef<Path>>(
+fn resource_dir_from<P: AsRef<std::path::Path>>(
   exe: P,
   package_info: &PackageInfo,
   env: &Env,
@@ -279,7 +289,7 @@ fn resource_dir_from<P: AsRef<Path>>(
   let exe_dir = exe.as_ref().parent().expect("failed to get exe directory");
   let curr_dir = exe_dir.display().to_string();
 
-  let parts: Vec<&str> = curr_dir.split(MAIN_SEPARATOR).collect();
+  let parts: Vec<&str> = curr_dir.split(std::path::MAIN_SEPARATOR).collect();
   let len = parts.len();
 
   // Check if running from the Cargo output directory, which means it's an executable in a development machine
@@ -299,25 +309,22 @@ fn resource_dir_from<P: AsRef<Path>>(
 
   #[cfg(target_os = "linux")]
   {
-    res = if curr_dir.ends_with("/data/usr/bin") {
-      // running from the deb bundle dir
-      exe_dir
-        .join(format!("../lib/{}", package_info.crate_name))
-        .canonicalize()
-        .map_err(Into::into)
+    // (canonicalize checks for existence, so there's no need for an extra check)
+    res = if let Ok(bundle_dir) = exe_dir
+      .join(format!("../lib/{}", package_info.name))
+      .canonicalize()
+    {
+      Ok(bundle_dir)
     } else if let Some(appdir) = &env.appdir {
       let appdir: &std::path::Path = appdir.as_ref();
       Ok(PathBuf::from(format!(
         "{}/usr/lib/{}",
         appdir.display(),
-        package_info.crate_name
+        package_info.name
       )))
     } else {
       // running bundle
-      Ok(PathBuf::from(format!(
-        "/usr/lib/{}",
-        package_info.crate_name
-      )))
+      Ok(PathBuf::from(format!("/usr/lib/{}", package_info.name)))
     };
   }
 
@@ -389,6 +396,7 @@ mod tests {
     assert_eq!(resource_dir, path.parent().unwrap());
 
     let path = PathBuf::from("/path/to/target/unknown-profile/app");
+    #[allow(clippy::needless_borrows_for_generic_args)]
     let resource_dir = super::resource_dir_from(&path, &package_info, &env);
     #[cfg(target_os = "macos")]
     assert!(resource_dir.is_err());

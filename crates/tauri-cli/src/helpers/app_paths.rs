@@ -18,7 +18,12 @@ use tauri_utils::{
 };
 
 const TAURI_GITIGNORE: &[u8] = include_bytes!("../../tauri.gitignore");
-static APP_DIR: OnceLock<PathBuf> = OnceLock::new();
+// path to the Tauri app (Rust crate) directory, usually `<project>/src-tauri/`
+const ENV_TAURI_APP_PATH: &str = "TAURI_APP_PATH";
+// path to the frontend app directory, usually `<project>/`
+const ENV_TAURI_FRONTEND_PATH: &str = "TAURI_FRONTEND_PATH";
+
+static FRONTEND_DIR: OnceLock<PathBuf> = OnceLock::new();
 static TAURI_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn walk_builder(path: &Path) -> WalkBuilder {
@@ -34,6 +39,7 @@ pub fn walk_builder(path: &Path) -> WalkBuilder {
   let mut builder = WalkBuilder::new(path);
   builder.add_custom_ignore_filename(".taurignore");
   builder.git_global(false);
+  builder.parents(false);
   let _ = builder.add_ignore(default_gitignore);
   builder
 }
@@ -68,50 +74,74 @@ fn lookup<F: Fn(&PathBuf) -> bool>(dir: &Path, checker: F) -> Option<PathBuf> {
   None
 }
 
+fn env_tauri_app_path() -> Option<PathBuf> {
+  std::env::var(ENV_TAURI_APP_PATH)
+    .map(PathBuf::from)
+    .ok()?
+    .canonicalize()
+    .ok()
+    .map(|p| dunce::simplified(&p).to_path_buf())
+}
+
+fn env_tauri_frontend_path() -> Option<PathBuf> {
+  std::env::var(ENV_TAURI_FRONTEND_PATH)
+    .map(PathBuf::from)
+    .ok()?
+    .canonicalize()
+    .ok()
+    .map(|p| dunce::simplified(&p).to_path_buf())
+}
+
 pub fn resolve_tauri_dir() -> Option<PathBuf> {
-  let Ok(cwd) = current_dir() else {
-    return None;
-  };
+  let src_dir = env_tauri_app_path().or_else(|| current_dir().ok())?;
 
-  if cwd.join(ConfigFormat::Json.into_file_name()).exists()
-    || cwd.join(ConfigFormat::Json5.into_file_name()).exists()
-    || cwd.join(ConfigFormat::Toml.into_file_name()).exists()
-  {
-    return Some(cwd);
-  }
-
-  let src_tauri = cwd.join("src-tauri");
-  if src_tauri.join(ConfigFormat::Json.into_file_name()).exists()
-    || src_tauri
-      .join(ConfigFormat::Json5.into_file_name())
+  for standard_tauri_path in [src_dir.clone(), src_dir.join("src-tauri")] {
+    if standard_tauri_path
+      .join(ConfigFormat::Json.into_file_name())
       .exists()
-    || src_tauri.join(ConfigFormat::Toml.into_file_name()).exists()
-  {
-    return Some(src_tauri);
+      || standard_tauri_path
+        .join(ConfigFormat::Json5.into_file_name())
+        .exists()
+      || standard_tauri_path
+        .join(ConfigFormat::Toml.into_file_name())
+        .exists()
+    {
+      log::debug!(
+        "Found Tauri project inside {} on early lookup",
+        standard_tauri_path.display()
+      );
+      return Some(standard_tauri_path);
+    }
   }
 
-  lookup(&cwd, |path| {
+  log::debug!("resolving Tauri directory from {}", src_dir.display());
+
+  lookup(&src_dir, |path| {
     folder_has_configuration_file(Target::Linux, path) || is_configuration_file(Target::Linux, path)
   })
   .map(|p| {
     if p.is_dir() {
+      log::debug!("Found Tauri project directory {}", p.display());
       p
     } else {
+      log::debug!("Found Tauri project configuration file {}", p.display());
       p.parent().unwrap().to_path_buf()
     }
   })
 }
 
 pub fn resolve() {
-  TAURI_DIR.set(resolve_tauri_dir().unwrap_or_else(||
-    panic!("Couldn't recognize the current folder as a Tauri project. It must contain a `{}`, `{}` or `{}` file in any subfolder.",
+  TAURI_DIR.set(resolve_tauri_dir().unwrap_or_else(|| {
+    let env_var_name = env_tauri_app_path().is_some().then(|| format!("`{ENV_TAURI_APP_PATH}`"));
+    panic!("Couldn't recognize the {} folder as a Tauri project. It must contain a `{}`, `{}` or `{}` file in any subfolder.",
+      env_var_name.as_deref().unwrap_or("current"),
       ConfigFormat::Json.into_file_name(),
       ConfigFormat::Json5.into_file_name(),
       ConfigFormat::Toml.into_file_name()
     )
-  )).expect("tauri dir already resolved");
-  APP_DIR
-    .set(resolve_app_dir().unwrap_or_else(|| tauri_dir().parent().unwrap().to_path_buf()))
+  })).expect("tauri dir already resolved");
+  FRONTEND_DIR
+    .set(resolve_frontend_dir().unwrap_or_else(|| tauri_dir().parent().unwrap().to_path_buf()))
     .expect("app dir already resolved");
 }
 
@@ -121,13 +151,20 @@ pub fn tauri_dir() -> &'static PathBuf {
     .expect("app paths not initialized, this is a Tauri CLI bug")
 }
 
-pub fn resolve_app_dir() -> Option<PathBuf> {
-  let cwd = current_dir().expect("failed to read cwd");
-  if cwd.join("package.json").exists() {
-    return Some(cwd);
+pub fn resolve_frontend_dir() -> Option<PathBuf> {
+  let frontend_dir =
+    env_tauri_frontend_path().unwrap_or_else(|| current_dir().expect("failed to read cwd"));
+
+  if frontend_dir.join("package.json").exists() {
+    return Some(frontend_dir);
   }
 
-  lookup(&cwd, |path| {
+  log::debug!(
+    "resolving frontend directory from {}",
+    frontend_dir.display()
+  );
+
+  lookup(&frontend_dir, |path| {
     if let Some(file_name) = path.file_name() {
       file_name == OsStr::new("package.json")
     } else {
@@ -137,8 +174,8 @@ pub fn resolve_app_dir() -> Option<PathBuf> {
   .map(|p| p.parent().unwrap().to_path_buf())
 }
 
-pub fn app_dir() -> &'static PathBuf {
-  APP_DIR
+pub fn frontend_dir() -> &'static PathBuf {
+  FRONTEND_DIR
     .get()
     .expect("app paths not initialized, this is a Tauri CLI bug")
 }

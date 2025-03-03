@@ -18,6 +18,7 @@ Default permissions for the plugin.
 - `allow-is-minimizable`
 - `allow-is-closable`
 - `allow-is-visible`
+- `allow-is-enabled`
 - `allow-title`
 - `allow-current-monitor`
 - `allow-primary-monitor`
@@ -27,7 +28,7 @@ Default permissions for the plugin.
 - `allow-theme`
 - `allow-internal-toggle-maximize`
 
-## Permission Table 
+## Permission Table
 
 <table>
 <tr>
@@ -396,6 +397,32 @@ Enables the is_decorated command without any pre-configured scope.
 <td>
 
 Denies the is_decorated command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:allow-is-enabled`
+
+</td>
+<td>
+
+Enables the is_enabled command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-is-enabled`
+
+</td>
+<td>
+
+Denies the is_enabled command without any pre-configured scope.
 
 </td>
 </tr>
@@ -871,6 +898,84 @@ Denies the set_always_on_top command without any pre-configured scope.
 <tr>
 <td>
 
+`core:window:allow-set-background-color`
+
+</td>
+<td>
+
+Enables the set_background_color command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-background-color`
+
+</td>
+<td>
+
+Denies the set_background_color command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:allow-set-badge-count`
+
+</td>
+<td>
+
+Enables the set_badge_count command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-badge-count`
+
+</td>
+<td>
+
+Denies the set_badge_count command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:allow-set-badge-label`
+
+</td>
+<td>
+
+Enables the set_badge_label command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-badge-label`
+
+</td>
+<td>
+
+Denies the set_badge_label command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `core:window:allow-set-closable`
 
 </td>
@@ -1072,6 +1177,32 @@ Enables the set_effects command without any pre-configured scope.
 <td>
 
 Denies the set_effects command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:allow-set-enabled`
+
+</td>
+<td>
+
+Enables the set_enabled command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-enabled`
+
+</td>
+<td>
+
+Denies the set_enabled command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1287,6 +1418,32 @@ Denies the set_minimizable command without any pre-configured scope.
 <tr>
 <td>
 
+`core:window:allow-set-overlay-icon`
+
+</td>
+<td>
+
+Enables the set_overlay_icon command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-overlay-icon`
+
+</td>
+<td>
+
+Denies the set_overlay_icon command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `core:window:allow-set-position`
 
 </td>
@@ -1462,6 +1619,32 @@ Enables the set_skip_taskbar command without any pre-configured scope.
 <td>
 
 Denies the set_skip_taskbar command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:allow-set-theme`
+
+</td>
+<td>
+
+Enables the set_theme command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:window:deny-set-theme`
+
+</td>
+<td>
+
+Denies the set_theme command without any pre-configured scope.
 
 </td>
 </tr>
